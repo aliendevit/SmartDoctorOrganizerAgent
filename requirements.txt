@@ -1,0 +1,10 @@
+PyQt5>=5.15
+reportlab>=4.0
+SpeechRecognition>=3.10
+python-dateutil>=2.9
+dateparser>=1.2
+openpyxl>=3.1
+pyyaml>=6.0
+# Optional:
+faster-whisper>=1.0
+matplotlib>=3.8

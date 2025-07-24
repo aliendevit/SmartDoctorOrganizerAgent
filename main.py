@@ -2,6 +2,7 @@
 import sys, warnings, importlib, traceback
 from pathlib import Path
 from PyQt5 import QtWidgets, QtCore, QtGui
+from UI import design_system  # NEW
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -10,10 +11,10 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# --- safe translation helper ---
+# --- translation helper (safe no-op fallback) ---
 def _ensure_translation_helper():
     try:
-        import translation_helper  # noqa
+        from features import translation_helper
     except Exception:
         import types
         th = types.ModuleType("translation_helper")
@@ -23,12 +24,31 @@ _ensure_translation_helper()
 
 def _tr(s: str) -> str:
     try:
-        from translation_helper import tr
+        from features.translation_helper import tr
         return tr(s)
     except Exception:
         return s
 
-# --- import utils with error capture ---
+# --- theming: prefer UI.design_system, then modern_theme, else Fusion ---
+def apply_theme(app: QtWidgets.QApplication):
+    # 1) Your design system (if present)
+    try:
+        from UI.design_system import apply_clinic_theme
+        apply_clinic_theme(app, base_pt=11)
+        return
+    except Exception:
+        pass
+    # 2) Modern theme fallback
+    try:
+        from UI.modern_theme import ModernTheme
+        ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
+        return
+    except Exception:
+        pass
+    # 3) Qt Fusion (last resort)
+    app.setStyle("Fusion")
+
+# --- generic resilient import helper ---
 def _import_first_or_report(title: str, candidates):
     """
     Try importing [(module, class), ...] in order.
@@ -48,7 +68,7 @@ def _import_first_or_report(title: str, candidates):
             errors.append(f"{mod}.{cls} -> import error:\n{tb}")
     return None, "\n\n".join(errors) if errors else f"No import candidates for {title}"
 
-# ---- candidates (local, Tabs.*, and model_intent.* for ChatBot) ----
+# ---- candidates (local & Tabs.*) ----
 ExtractionTab , ERR_EX  = _import_first_or_report("Extraction", [
     ("extraction_tab", "ExtractionTab"),
     ("Tabs.extraction_tab", "ExtractionTab"),
@@ -74,12 +94,12 @@ ClientStatsTab, ERR_CS  = _import_first_or_report("Client Stats", [
     ("Tabs.clients_stats_tab", "ClientStatsTab"),
 ])
 ChatBotTab    , ERR_CB  = _import_first_or_report("ChatBot", [
-    ("model_intent.chatbot_tab", "ChatBotTab"),   # <-- bot here
+    ("model_intent.chatbot_tab", "ChatBotTab"),
     ("chatbot_tab",              "ChatBotTab"),
     ("Tabs.chatbot_tab",         "ChatBotTab"),
 ])
 
-# ---- placeholder tab that shows the real error text in a scroll ----
+# ---- placeholder that surfaces real error text ----
 class _MissingTab(QtWidgets.QWidget):
     def __init__(self, title: str, error_text: str, parent=None):
         super().__init__(parent)
@@ -91,6 +111,7 @@ class _MissingTab(QtWidgets.QWidget):
         txt.setReadOnly(True); txt.setMinimumHeight(220)
         lay.addStretch(1); lay.addWidget(lbl); lay.addWidget(txt); lay.addStretch(1)
 
+# ---- lightweight notifier for tray toasts ----
 class Notifier(QtCore.QObject):
     def __init__(self, tray_icon: QtWidgets.QSystemTrayIcon, parent=None):
         super().__init__(parent); self.tray = tray_icon
@@ -101,7 +122,8 @@ class Notifier(QtCore.QObject):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MedicalDoc AI"); self.resize(1200, 800)
+        self.setWindowTitle("MedicalDoc AI Demo v 1.9.3")
+        self.resize(1200, 800)
 
         self.tray_icon = QtWidgets.QSystemTrayIcon(self)
         self.tray_icon.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon))
@@ -109,23 +131,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tray_icon.setContextMenu(menu); self.tray_icon.show()
         self.notifier = Notifier(self.tray_icon, self)
 
-        self.tabs = QtWidgets.QTabWidget(); self.setCentralWidget(self.tabs)
+        self.tabs = QtWidgets.QTabWidget()
+        # — these lines help the TabBar look like a modern app —
+        self.tabs.setDocumentMode(True)                 # flatter tabs, matches our QSS
+        self.tabs.setTabBarAutoHide(False)              # always show tabs
+        self.tabs.tabBar().setElideMode(QtCore.Qt.ElideRight)
+        self.setCentralWidget(self.tabs)
+
         self._make_tabs()
         self.statusBar().showMessage("Ready")
         self._load_settings()
 
+    # ---- persistence ----
     def _load_settings(self):
-        s = QtCore.QSettings("YourOrg", "MedicalDocAI")
+        s = QtCore.QSettings("YourOrg", "MedicalDocAI Demo v1.9.3")
         g = s.value("main/geometry");  self.restoreGeometry(g) if g else None
     def _save_settings(self):
-        s = QtCore.QSettings("YourOrg", "MedicalDocAI")
+        s = QtCore.QSettings("YourOrg", "MedicalDocAI Demo v1.9.3")
         s.setValue("main/geometry", self.saveGeometry())
     def closeEvent(self, e: QtGui.QCloseEvent):
         self._save_settings(); super().closeEvent(e)
 
+    # ---- tabs & wiring ----
     def _make_tabs(self):
         self.extraction  = ExtractionTab() if ExtractionTab else _MissingTab("Extraction", ERR_EX or "extraction_tab")
-        # Appointments
+
+        # Appointments (pass tray if ctor supports it)
         if AppointmentTab:
             try:
                 self.appointments = AppointmentTab(tray_icon=self.tray_icon)
@@ -141,7 +172,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.accounts    = AccountsTab()   if AccountsTab   else _MissingTab("Accounts",    ERR_ACC or "accounts_tab")
         self.client_stats= ClientStatsTab()if ClientStatsTab else _MissingTab("Client Stats",ERR_CS  or "client_stats_tab")
 
-        # --- Shared “bridge” so ChatBot uses the SAME data + can drive the UI ---
+        # Bridge for optional ChatBot
         try:
             from data.data import load_appointments, append_appointment, update_account_in_db
         except Exception:
@@ -156,15 +187,19 @@ class MainWindow(QtWidgets.QMainWindow):
             if hasattr(self.accounts, "update_table"):
                 self.accounts.update_table()
 
+        def _switch_to_client_stats():
+            idx = self.tabs.indexOf(self.client_stats)
+            if idx >= 0: self.tabs.setCurrentIndex(idx)
+
         bridge = {
             "load_appointments": load_appointments,
             "append_appointment": append_appointment,
             "update_payment": update_account_in_db,
             "switch_to_appointments": _switch_to_appts,
             "refresh_accounts": _refresh_accounts,
+            "switch_to_client_stats": _switch_to_client_stats,
         }
 
-        # ChatBot
         if ChatBotTab:
             try:
                 self.chatbot = ChatBotTab(bridge=bridge)
@@ -173,6 +208,7 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self.chatbot = _MissingTab("ChatBot", ERR_CB or "chatbot_tab")
 
+        # Tab order
         self.tabs.addTab(self.extraction,   _tr("Extraction"))
         self.tabs.addTab(self.appointments, _tr("Appointments"))
         self.tabs.addTab(self.dashboard,    _tr("Dashboard"))
@@ -180,7 +216,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self.client_stats, _tr("Client Stats"))
         self.tabs.addTab(self.chatbot,      _tr("Assistant Bot"))
 
-        # wire signals if available
+        # Extraction ➜ others
         for sig, slot in [
             ("dataProcessed",          self._on_data_processed),
             ("appointmentProcessed",   self._on_appointment_processed),
@@ -190,10 +226,25 @@ class MainWindow(QtWidgets.QMainWindow):
                 try: getattr(self.extraction, sig).connect(slot)
                 except Exception: pass
 
+        # ChatBot ➜ appointments
         if hasattr(self.chatbot, "appointmentCreated"):
             try: self.chatbot.appointmentCreated.connect(self._on_appointment_processed)
             except Exception: pass
 
+        # Accounts signals can drive dashboard/stats later if you want:
+        if hasattr(self.accounts, "clientAdded"):
+            self.accounts.clientAdded.connect(lambda _: self._refresh_summaries())
+        if hasattr(self.accounts, "clientUpdated"):
+            self.accounts.clientUpdated.connect(lambda _: self._refresh_summaries())
+
+    def _refresh_summaries(self):
+        for w, m in [(getattr(self, "dashboard", None), "refresh_data"),
+                     (getattr(self, "client_stats", None), "refresh_data")]:
+            if w and hasattr(w, m):
+                try: getattr(w, m)()
+                except Exception: pass
+
+    # ---- normalize & route appointments ----
     def _normalize_appointment(self, data: dict) -> dict:
         appt = dict(data or {})
         name = (appt.get("Name") or "").strip() or "Unknown"
@@ -204,12 +255,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.pyqtSlot(dict)
     def _on_data_processed(self, data: dict):
-        for w, m in [(getattr(self, "dashboard", None), "refresh_data"),
-                     (getattr(self, "accounts", None), "update_table"),
-                     (getattr(self, "client_stats", None), "refresh_data")]:
-            if w and hasattr(w, m):
-                try: getattr(w, m)()
-                except Exception: pass
+        self._refresh_summaries()
         self.notifier.info("Extraction", f"Processed data for {data.get('Name','Unknown')}")
 
     @QtCore.pyqtSlot(dict)
@@ -231,21 +277,52 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception: pass
         self.notifier.info("Automation", f"Switched to Appointments for {client_name}")
 
-def apply_theme(app: QtWidgets.QApplication):
-    try:
-        from modern_theme import ModernTheme
-        ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
-    except Exception:
-        app.setStyle("Fusion")
+    # ---- i18n runtime retitle ----
+    def retranslateUi(self):
+        idxs = {
+            "Extraction": self.tabs.indexOf(self.extraction),
+            "Appointments": self.tabs.indexOf(self.appointments),
+            "Dashboard": self.tabs.indexOf(self.dashboard),
+            "Accounts": self.tabs.indexOf(self.accounts),
+            "Client Stats": self.tabs.indexOf(self.client_stats),
+            "Assistant Bot": self.tabs.indexOf(self.chatbot),
+        }
+        self.tabs.setTabText(idxs["Extraction"], _tr("Extraction"))
+        self.tabs.setTabText(idxs["Appointments"], _tr("Appointments"))
+        self.tabs.setTabText(idxs["Dashboard"], _tr("Dashboard"))
+        self.tabs.setTabText(idxs["Accounts"], _tr("Accounts"))
+        self.tabs.setTabText(idxs["Client Stats"], _tr("Client Stats"))
+        self.tabs.setTabText(idxs["Assistant Bot"], _tr("Assistant Bot"))
+        # Cascade
+        for tab in (self.extraction, self.appointments, self.dashboard, self.accounts, self.client_stats, self.chatbot):
+            if hasattr(tab, "retranslateUi"):
+                try: tab.retranslateUi()
+                except Exception: pass
+
 
 def main():
-    QtCore.QCoreApplication.setOrganizationName("YourOrg")
+    QtCore.QCoreApplication.setOrganizationName("InnovationLabs")
     QtCore.QCoreApplication.setApplicationName("MedicalDocAI")
+
     app = QtWidgets.QApplication(sys.argv)
-    apply_theme(app)
-    win = MainWindow(); win.show()
-    try: win.notifier.info("MedicalDoc AI", "Ready.")
-    except Exception: pass
+
+    # Apply global glassy theme once
+    design_system.apply_global_theme(app, base_point_size=11)
+
+    win = MainWindow()
+    win.show()
+
+    # Optional: enable Windows Mica/Acrylic
+    try:
+        design_system.apply_window_backdrop(win, prefer_mica=True)
+    except Exception as e:
+        print("Backdrop:", e)
+
+    try:
+        win.notifier.info("MedicalDoc AI", "Ready.")
+    except Exception:
+        pass
+
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
