@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 # main.py
 import sys, warnings, importlib, traceback
 from pathlib import Path
@@ -126,10 +127,61 @@ from home_page import HomePage
 from Tabs.notification_tab import NotificationManager
 
 >>>>>>> 0e490db (no change)
+=======
+# main.py
+import sys, os, importlib
+from PyQt5 import QtWidgets, QtGui, QtCore
+from modern_theme import ModernTheme
+
+# Ensure the current folder is on sys.path
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if APP_DIR not in sys.path:
+    sys.path.insert(0, APP_DIR)
+
+def _import(symbol, candidates):
+    """
+    Try importing `symbol` from a list of candidate module names.
+    Returns the attribute or None if not found.
+    """
+    for modname in candidates:
+        try:
+            mod = importlib.import_module(modname)
+            return getattr(mod, symbol)
+        except Exception:
+            pass
+    return None
+
+# ---- Flexible imports (works for flat files or packages like Tabs/, widgets/) ----
+HomePage = _import("HomePage", (
+    "home_page",              # ./home_page.py
+    "Tabs.home_page",         # ./Tabs/home_page.py
+    "pages.home_page",        # ./pages/home_page.py
+))
+
+NotificationManager = _import("NotificationManager", (
+    "notification_tab",       # ./notification_tab.py
+    "Tabs.notification_tab",  # ./Tabs/notification_tab.py
+    "widgets.notification_tab" # ./widgets/notification_tab.py
+))
+
+def get_icon():
+    icon = QtGui.QIcon(os.path.join(APP_DIR, "icon.png"))
+    if icon.isNull():
+        # fallback pixmap if icon.png not present
+        pm = QtGui.QPixmap(64, 64)
+        pm.fill(QtGui.QColor("#4f46e5"))
+        painter = QtGui.QPainter(pm)
+        painter.setPen(QtGui.QColor("#ffffff"))
+        painter.drawText(pm.rect(), QtCore.Qt.AlignCenter, "MA")
+        painter.end()
+        icon = QtGui.QIcon(pm)
+    return icon
+>>>>>>> 650dc2b (design edit)
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
+<<<<<<< HEAD
         self.setWindowTitle("MedicalDoc AI Demo v 1.9.3")
         self.resize(1200, 800)
 
@@ -307,12 +359,89 @@ class MainWindow(QtWidgets.QMainWindow):
                 try: tab.retranslateUi()
                 except Exception: pass
 
+=======
+        self.setWindowTitle("MediAgent AI: Home version 1.0")
+        self.resize(1300, 850)
+        self._setup_toolbar()
+        self._setup_ui()
+        self._setup_tray()
+
+    def _setup_toolbar(self):
+        toolbar = QtWidgets.QToolBar()
+        toolbar.setMovable(False)
+        toolbar.setIconSize(QtCore.QSize(20, 20))
+        self.addToolBar(QtCore.Qt.TopToolBarArea, toolbar)
+
+        search = QtWidgets.QLineEdit()
+        search.setPlaceholderText("Search clients, appointments, notes…")
+        search.setFixedWidth(360)
+        search.setProperty("variant", "ghost")
+        act = QtWidgets.QWidgetAction(toolbar)
+        act.setDefaultWidget(search)
+        toolbar.addAction(act)
+
+        toolbar.addSeparator()
+
+        theme_btn = QtWidgets.QPushButton("Toggle theme")
+        theme_btn.setProperty("variant", "ghost")
+        theme_btn.clicked.connect(lambda: ModernTheme.toggle(QtWidgets.QApplication.instance()))
+        toolbar.addWidget(theme_btn)
+
+    def _setup_ui(self):
+        container = QtWidgets.QWidget()
+        root = QtWidgets.QVBoxLayout(container)
+        root.setContentsMargins(16, 12, 16, 16)
+        root.setSpacing(12)
+
+        banner = QtWidgets.QFrame()
+        banner.setProperty("modernCard", True)
+        b_ly = QtWidgets.QHBoxLayout(banner)
+        title = QtWidgets.QLabel("Welcome to MediAgent AI")
+        title.setStyleSheet("font-size: 16pt; font-weight: 700;")
+        b_ly.addWidget(title)
+        b_ly.addStretch(1)
+        quick = QtWidgets.QPushButton("New client")
+        quick.setProperty("variant", "ghost")
+        b_ly.addWidget(quick)
+        root.addWidget(banner)
+
+        # Use your HomePage if available; otherwise show a minimal fallback
+        if HomePage is not None:
+            central = HomePage()
+        else:
+            tabs = QtWidgets.QTabWidget()
+            tabs.addTab(QtWidgets.QLabel("Home"), "Home")
+            tabs.addTab(QtWidgets.QLabel("Appointments"), "Appointments")
+            tabs.addTab(QtWidgets.QLabel("Accounts"), "Accounts")
+            central = tabs
+
+        if isinstance(central, QtWidgets.QTabWidget):
+            central.setTabPosition(QtWidgets.QTabWidget.West)
+            central.setIconSize(QtCore.QSize(18, 18))
+            central.setDocumentMode(True)
+            central.setElideMode(QtCore.Qt.ElideRight)
+            central.setStyleSheet(central.styleSheet() + " QTabBar::tab { min-width: 180px; } ")
+        root.addWidget(central)
+
+        self.setCentralWidget(container)
+
+    def _setup_tray(self):
+        # Only set up tray if the class was successfully imported and a tray exists
+        if NotificationManager is not None and QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray_icon = NotificationManager(get_icon(), self)
+            self.tray_icon.show()
+            try:
+                self.tray_icon.show_notification("MediAgent AI is running")
+            except Exception:
+                pass
+>>>>>>> 650dc2b (design edit)
 
 def main():
     QtCore.QCoreApplication.setOrganizationName("InnovationLabs")
     QtCore.QCoreApplication.setApplicationName("MedicalDocAI")
 
     app = QtWidgets.QApplication(sys.argv)
+<<<<<<< HEAD
 
     # Apply global glassy theme once
     design_system.apply_global_theme(app, base_point_size=11)
@@ -331,6 +460,16 @@ def main():
     except Exception:
         pass
 
+=======
+    # Keep app alive when window closed (so tray stays)
+    app.setQuitOnLastWindowClosed(False)
+
+    # Apply the modern theme
+    ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
+
+    win = MainWindow()
+    win.show()
+>>>>>>> 650dc2b (design edit)
     sys.exit(app.exec_())
 
 if __name__ == "__main__":

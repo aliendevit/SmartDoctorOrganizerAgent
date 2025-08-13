@@ -61,6 +61,19 @@ def _ensure_archive_dir():
 
 # -----------------------------------------------------------------------------
 
+<<<<<<< HEAD
+=======
+# Make the archive path robust relative to this file
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ARCHIVE_FILE = os.path.normpath(os.path.join(BASE_DIR, "..", "json", "monthly_receipts_archive.json"))
+
+def _polish(*widgets):
+    """Re-apply QSS after setting dynamic properties."""
+    for w in widgets:
+        w.style().unpolish(w)
+        w.style().polish(w)
+        w.update()
+>>>>>>> 650dc2b (design edit)
 
 class DashboardTab(QtWidgets.QWidget):
     def __init__(self, parent=None):
@@ -74,6 +87,7 @@ class DashboardTab(QtWidgets.QWidget):
         self.load_archive()
         self.refresh_data()
 
+<<<<<<< HEAD
     # ---------------- UI ----------------
     def _build_ui(self):
         root = QtWidgets.QVBoxLayout(self)
@@ -225,6 +239,27 @@ class DashboardTab(QtWidgets.QWidget):
         self.outstanding_label = QtWidgets.QLabel(_tr("Loading outstanding payments..."))
         self.outstanding_label.setStyleSheet("font-weight: 600;")
         og.addWidget(self.outstanding_label)
+=======
+    # Use the shared translation helper
+    def tr(self, text):
+        from translation_helper import tr
+        return tr(text)
+
+    def setup_ui(self):
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
+
+        # ---------------- Outstanding Payments (Card) ----------------
+        self.outstanding_group = QtWidgets.QGroupBox(self.tr("Outstanding Payments"))
+        og_ly = QtWidgets.QVBoxLayout(self.outstanding_group)
+        og_ly.setContentsMargins(12, 12, 12, 12)
+        og_ly.setSpacing(8)
+
+        self.outstanding_label = QtWidgets.QLabel(self.tr("Loading outstanding payments..."))
+        self.outstanding_label.setStyleSheet("font-weight: 600;")
+        og_ly.addWidget(self.outstanding_label)
+>>>>>>> 650dc2b (design edit)
 
         self.outstanding_table = QtWidgets.QTableWidget()
         self.outstanding_table.setColumnCount(4)
@@ -236,6 +271,7 @@ class DashboardTab(QtWidgets.QWidget):
         self.outstanding_table.setAlternatingRowColors(True)
         self.outstanding_table.setSelectionBehavior(QtWidgets.QTableWidget.SelectRows)
         self.outstanding_table.setEditTriggers(QtWidgets.QTableWidget.NoEditTriggers)
+<<<<<<< HEAD
         self.outstanding_table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.outstanding_table.customContextMenuRequested.connect(self._menu_outstanding)
         self.outstanding_table.setSortingEnabled(True)
@@ -259,6 +295,91 @@ class DashboardTab(QtWidgets.QWidget):
 
         ag.addLayout(arch_top)
 
+=======
+        og_ly.addWidget(self.outstanding_table)
+
+        self.refresh_outstanding_btn = QtWidgets.QPushButton(self.tr("Refresh Outstanding Payments"))
+        # self.refresh_outstanding_btn.setProperty("variant", "ghost")
+        self.refresh_outstanding_btn.setProperty("accent", "violet")
+        self.refresh_outstanding_btn.clicked.connect(self.refresh_data)
+        og_ly.addWidget(self.refresh_outstanding_btn)
+        _polish(self.refresh_outstanding_btn)
+
+        root.addWidget(self.outstanding_group)
+
+        # ---------------- Inventory Summary (Card) ----------------
+        self.inventory_group = QtWidgets.QGroupBox(self.tr("Inventory Summary"))
+        ig_ly = QtWidgets.QVBoxLayout(self.inventory_group)
+        ig_ly.setContentsMargins(12, 12, 12, 12)
+        ig_ly.setSpacing(8)
+
+        period_row = QtWidgets.QHBoxLayout()
+        period_row.setSpacing(8)
+        self.period_label = QtWidgets.QLabel(self.tr("Inventory Period (days):"))
+        self.inventory_days_spinbox = QtWidgets.QSpinBox()
+        self.inventory_days_spinbox.setRange(1, 365)
+        self.inventory_days_spinbox.setValue(30)
+        period_row.addWidget(self.period_label)
+        period_row.addWidget(self.inventory_days_spinbox)
+        period_row.addStretch(1)
+        ig_ly.addLayout(period_row)
+
+        self.current_inventory_label = QtWidgets.QLabel(self.tr("Loading inventory summary..."))
+        self.current_inventory_label.setStyleSheet("font-weight: 600;")
+        ig_ly.addWidget(self.current_inventory_label)
+
+        actions_row = QtWidgets.QHBoxLayout()
+        actions_row.setSpacing(8)
+
+        self.refresh_inventory_btn = QtWidgets.QPushButton(self.tr("Refresh Inventory Summary"))
+        # self.refresh_inventory_btn.setProperty("variant", "ghost")
+        self.refresh_inventory_btn.setProperty("accent", "sky")
+        self.refresh_inventory_btn.clicked.connect(self.refresh_data)
+
+        self.archive_button = QtWidgets.QPushButton(self.tr("Archive Inventory"))
+        self.archive_button.setProperty("variant", "warning")  # amber
+        self.archive_button.clicked.connect(self.archive_current_period)
+
+        self.show_unpaid_btn = QtWidgets.QPushButton(self.tr("Show Unpaid Clients"))
+        self.show_unpaid_btn.setProperty("variant", "danger")   # red
+        self.show_unpaid_btn.clicked.connect(self.show_unpaid_clients)
+
+        actions_row.addWidget(self.refresh_inventory_btn)
+        actions_row.addStretch(1)
+        actions_row.addWidget(self.show_unpaid_btn)
+        actions_row.addWidget(self.archive_button)
+
+        ig_ly.addLayout(actions_row)
+        _polish(self.refresh_inventory_btn, self.archive_button, self.show_unpaid_btn)
+
+        root.addWidget(self.inventory_group)
+
+        # ---------------- Client Summary (Card) ----------------
+        self.client_summary_group = QtWidgets.QGroupBox(self.tr("Client Summary"))
+        cs_ly = QtWidgets.QVBoxLayout(self.client_summary_group)
+        cs_ly.setContentsMargins(12, 12, 12, 12)
+        cs_ly.setSpacing(8)
+
+        self.client_summary_label = QtWidgets.QLabel(self.tr("Loading client summary..."))
+        self.client_summary_label.setStyleSheet("font-weight: 600;")
+        cs_ly.addWidget(self.client_summary_label)
+
+        self.refresh_summary_btn = QtWidgets.QPushButton(self.tr("Refresh Client Summary"))
+        # self.refresh_summary_btn.setProperty("variant", "ghost")
+        self.refresh_summary_btn.setProperty("accent", "emerald")
+        self.refresh_summary_btn.clicked.connect(self.refresh_data)
+        cs_ly.addWidget(self.refresh_summary_btn, alignment=QtCore.Qt.AlignRight)
+        _polish(self.refresh_summary_btn)
+
+        root.addWidget(self.client_summary_group)
+
+        # ---------------- Archive History (Card) ----------------
+        self.archive_group = QtWidgets.QGroupBox(self.tr("Archived Inventory"))
+        ag_ly = QtWidgets.QVBoxLayout(self.archive_group)
+        ag_ly.setContentsMargins(12, 12, 12, 12)
+        ag_ly.setSpacing(8)
+
+>>>>>>> 650dc2b (design edit)
         self.archive_table = QtWidgets.QTableWidget()
         self.archive_table.setColumnCount(4)
         self.archive_table.setHorizontalHeaderLabels([
@@ -269,6 +390,7 @@ class DashboardTab(QtWidgets.QWidget):
         self.archive_table.setAlternatingRowColors(True)
         self.archive_table.setSelectionBehavior(QtWidgets.QTableWidget.SelectRows)
         self.archive_table.setEditTriggers(QtWidgets.QTableWidget.NoEditTriggers)
+<<<<<<< HEAD
         self.archive_table.setSortingEnabled(True)
         ag.addWidget(self.archive_table, 1)
 
@@ -410,16 +532,35 @@ class DashboardTab(QtWidgets.QWidget):
         else:
             for b in (self.btn_7d, self.btn_30d, self.btn_90d, self.btn_365d):
                 b.setChecked(False)
+=======
+        ag_ly.addWidget(self.archive_table)
 
+        root.addWidget(self.archive_group)
+>>>>>>> 650dc2b (design edit)
+
+        root.addStretch(1)
+
+    # ---------------- Data/Logic ----------------
     def refresh_data(self):
         clients = _load_all_clients_safe()
         self._all_clients_cache = list(clients)
 
+<<<<<<< HEAD
         # Outstanding (overall)
         outstanding_clients = []
         for client in clients:
             total_amount = _to_float(client.get("Total Amount", 0))
             total_paid   = _to_float(client.get("Total Paid", 0))
+=======
+        # --- Outstanding Payments ---
+        outstanding_clients = []
+        for client in clients:
+            try:
+                total_amount = float(client.get("Total Amount", 0))
+                total_paid = float(client.get("Total Paid", 0))
+            except (ValueError, TypeError):
+                total_amount = total_paid = 0
+>>>>>>> 650dc2b (design edit)
             if total_paid < total_amount:
                 outstanding_clients.append({
                     "Name": client.get("Name", "") or _tr("Unknown"),
@@ -427,16 +568,30 @@ class DashboardTab(QtWidgets.QWidget):
                     "Total Paid": total_paid,
                     "Outstanding": max(0.0, total_amount - total_paid)
                 })
+<<<<<<< HEAD
         self._outstanding_cache = outstanding_clients
         self._apply_outstanding_filters()
 
         # Period summary
         days = int(self.inventory_days_spinbox.value())
+=======
+        num_outstanding = len(outstanding_clients)
+        total_outstanding = sum(item["Outstanding"] for item in outstanding_clients)
+        self.outstanding_label.setText(
+            f"{self.tr('Patients with outstanding payments:')} {num_outstanding} | "
+            f"{self.tr('Total Outstanding:')} {total_outstanding:,.2f}"
+        )
+        self.populate_outstanding_table(outstanding_clients)
+
+        # --- Inventory Summary (period) ---
+        days = self.inventory_days_spinbox.value()
+>>>>>>> 650dc2b (design edit)
         end_date = QDate.currentDate()
         start_date = end_date.addDays(-days)
         total_paid_period = 0.0
         total_outstanding_period = 0.0
         num_unpaid_period = 0
+<<<<<<< HEAD
 
         for client in clients:
             date_obj = QDate.fromString(client.get("Date", ""), "dd-MM-yyyy")
@@ -460,6 +615,70 @@ class DashboardTab(QtWidgets.QWidget):
         total_revenue = 0.0
         total_outstanding_all = 0.0
         total_unpaid = 0
+=======
+
+        for client in clients:
+            date_str = client.get("Date", "")
+            if not date_str:
+                continue
+            date_obj = QDate.fromString(date_str, "dd-MM-yyyy")
+            if date_obj.isValid() and start_date <= date_obj <= end_date:
+                try:
+                    tp = float(client.get("Total Paid", 0))
+                    ta = float(client.get("Total Amount", 0))
+                except (ValueError, TypeError):
+                    tp = ta = 0.0
+                total_paid_period += tp
+                if tp < ta:
+                    total_outstanding_period += (ta - tp)
+                    num_unpaid_period += 1
+
+        period_label = f"{start_date.toString('dd-MM-yyyy')} {self.tr('to')} {end_date.toString('dd-MM-yyyy')}"
+        self.current_inventory_label.setText(
+            f"{period_label} - {self.tr('Total Receipts:')} {total_paid_period:,.2f} | "
+            f"{self.tr('Outstanding:')} {total_outstanding_period:,.2f} | "
+            f"{self.tr('Unpaid Clients:')} {num_unpaid_period}"
+        )
+
+        # --- Client Summary (overall) ---
+        total_clients = len(clients)
+        ages = []
+        total_revenue = 0.0
+        total_outstanding_all = 0.0
+
+        for client in clients:
+            try:
+                age_val = float(client.get("Age", 0))
+                ages.append(age_val)
+            except (ValueError, TypeError):
+                pass
+            try:
+                tp = float(client.get("Total Paid", 0))
+                ta = float(client.get("Total Amount", 0))
+                total_revenue += tp
+                if tp < ta:
+                    total_outstanding_all += (ta - tp)
+            except (ValueError, TypeError):
+                pass
+
+        avg_age = (sum(ages) / len(ages)) if ages else 0.0
+        self.client_summary_label.setText(
+            f"{self.tr('Total Clients:')} {total_clients} | "
+            f"{self.tr('Average Age:')} {avg_age:.1f} | "
+            f"{self.tr('Total Revenue:')} {total_revenue:,.2f} | "
+            f"{self.tr('Total Outstanding:')} {total_outstanding_all:,.2f}"
+        )
+
+    def populate_outstanding_table(self, data):
+        self.archive_table.clearSelection()
+        self.outstanding_table.setRowCount(0)
+        for row, item in enumerate(sorted(data, key=lambda x: x["Outstanding"], reverse=True)):
+            self.outstanding_table.insertRow(row)
+            self.outstanding_table.setItem(row, 0, QtWidgets.QTableWidgetItem(item["Name"]))
+            self.outstanding_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{item['Total Amount']:,.2f}"))
+            self.outstanding_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{item['Total Paid']:,.2f}"))
+            self.outstanding_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{item['Outstanding']:,.2f}"))
+>>>>>>> 650dc2b (design edit)
 
         for client in clients:
             tp = _to_float(client.get("Total Paid", 0))
@@ -517,12 +736,27 @@ class DashboardTab(QtWidgets.QWidget):
         unpaid_names = []
         clients = self._all_clients_cache or _load_all_clients_safe()
         for client in clients:
+<<<<<<< HEAD
             date_obj = QDate.fromString(client.get("Date", ""), "dd-MM-yyyy")
             if date_obj.isValid() and start_date <= date_obj <= end_date:
                 tp = _to_float(client.get("Total Paid", 0))
                 ta = _to_float(client.get("Total Amount", 0))
                 if tp < ta:
                     unpaid_names.append(client.get("Name", _tr("Unknown")))
+=======
+            date_str = client.get("Date", "")
+            if not date_str:
+                continue
+            date_obj = QDate.fromString(date_str, "dd-MM-yyyy")
+            if date_obj.isValid() and start_date <= date_obj <= end_date:
+                try:
+                    tp = float(client.get("Total Paid", 0))
+                    ta = float(client.get("Total Amount", 0))
+                except (ValueError, TypeError):
+                    continue
+                if tp < ta:
+                    unpaid_names.append(client.get("Name", self.tr("Unknown")))
+>>>>>>> 650dc2b (design edit)
         if unpaid_names:
             QtWidgets.QMessageBox.information(
                 self, _tr("Unpaid Clients"),
@@ -535,30 +769,61 @@ class DashboardTab(QtWidgets.QWidget):
             )
 
     def archive_current_period(self):
+<<<<<<< HEAD
         _ensure_archive_dir()
         days = int(self.inventory_days_spinbox.value())
         end_date = QDate.currentDate()
         start_date = end_date.addDays(-days)
         period_label = f"{start_date.toString('dd-MM-yyyy')} {_tr('to')} {end_date.toString('dd-MM-yyyy')}"
         clients = self._all_clients_cache or _load_all_clients_safe()
+=======
+        # ensure folder exists
+        os.makedirs(os.path.dirname(ARCHIVE_FILE), exist_ok=True)
+
+        days = self.inventory_days_spinbox.value()
+        end_date = QDate.currentDate()
+        start_date = end_date.addDays(-days)
+        period_label = f"{start_date.toString('dd-MM-yyyy')} {self.tr('to')} {end_date.toString('dd-MM-yyyy')}"
+
+        clients = load_all_clients()
+>>>>>>> 650dc2b (design edit)
         total_paid_period = 0.0
         total_outstanding_period = 0.0
         num_unpaid_period = 0
+
         for client in clients:
+<<<<<<< HEAD
             date_obj = QDate.fromString(client.get("Date", ""), "dd-MM-yyyy")
             if date_obj.isValid() and start_date <= date_obj <= end_date:
                 tp = _to_float(client.get("Total Paid", 0))
                 ta = _to_float(client.get("Total Amount", 0))
+=======
+            date_str = client.get("Date", "")
+            if not date_str:
+                continue
+            date_obj = QDate.fromString(date_str, "dd-MM-yyyy")
+            if date_obj.isValid() and start_date <= date_obj <= end_date:
+                try:
+                    tp = float(client.get("Total Paid", 0))
+                    ta = float(client.get("Total Amount", 0))
+                except (ValueError, TypeError):
+                    tp = ta = 0.0
+>>>>>>> 650dc2b (design edit)
                 total_paid_period += tp
                 if tp < ta:
                     total_outstanding_period += (ta - tp)
                     num_unpaid_period += 1
+<<<<<<< HEAD
+=======
+
+>>>>>>> 650dc2b (design edit)
         period_summary = {
             "period": period_label,
             "total_receipts": total_paid_period,
             "total_outstanding": total_outstanding_period,
             "unpaid_clients": num_unpaid_period
         }
+
         archive = []
         if os.path.exists(ARCHIVE_FILE):
             try:
@@ -566,6 +831,7 @@ class DashboardTab(QtWidgets.QWidget):
                     archive = json.load(f)
             except Exception:
                 archive = []
+<<<<<<< HEAD
         updated = False
         for entry in archive:
             if entry.get("period") == period_label:
@@ -576,6 +842,34 @@ class DashboardTab(QtWidgets.QWidget):
         self.load_archive()
         QtWidgets.QMessageBox.information(self, _tr("Archive"),
                                           _tr("Summary for ") + period_label + _tr(" archived successfully."))
+=======
+
+        # upsert
+        updated = False
+        for entry in archive:
+            if entry.get("period") == period_label:
+                entry.update(period_summary)
+                updated = True
+                break
+        if not updated:
+            archive.append(period_summary)
+
+        with open(ARCHIVE_FILE, "w", encoding="utf-8") as f:
+            json.dump(archive, f, indent=4, ensure_ascii=False)
+
+        self.load_archive()
+        QtWidgets.QMessageBox.information(
+            self, self.tr("Archive"),
+            self.tr("Summary for ") + period_label + self.tr(" archived successfully.")
+        )
+
+    def _to_float(self, v):
+        try:
+            # allow "1,234.56" strings too
+            return float(str(v).replace(",", "").strip())
+        except Exception:
+            return 0.0
+>>>>>>> 650dc2b (design edit)
 
     def load_archive(self):
         archive = []
@@ -585,6 +879,7 @@ class DashboardTab(QtWidgets.QWidget):
                     archive = json.load(f)
             except Exception:
                 archive = []
+<<<<<<< HEAD
         self.archive_table.setRowCount(0)
         for row, entry in enumerate(archive):
             self.archive_table.insertRow(row)
@@ -607,6 +902,22 @@ class DashboardTab(QtWidgets.QWidget):
             self.archive_table.setItem(row, 2, _num(outstanding))
             self.archive_table.setItem(row, 3, it_unpaid)
         self.archive_table.sortItems(0, QtCore.Qt.DescendingOrder)
+=======
+
+        self.archive_table.setRowCount(0)
+        for row, entry in enumerate(archive):
+            self.archive_table.insertRow(row)
+
+            period = entry.get("period", "")
+            receipts = self._to_float(entry.get("total_receipts", 0))
+            outstanding = self._to_float(entry.get("total_outstanding", 0))
+            unpaid = entry.get("unpaid_clients", 0)
+
+            self.archive_table.setItem(row, 0, QtWidgets.QTableWidgetItem(period))
+            self.archive_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{receipts:,.2f}"))
+            self.archive_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{outstanding:,.2f}"))
+            self.archive_table.setItem(row, 3, QtWidgets.QTableWidgetItem(str(unpaid)))
+>>>>>>> 650dc2b (design edit)
 
     def _open_archive_folder(self):
         folder = os.path.dirname(ARCHIVE_FILE)
@@ -684,13 +995,31 @@ class DashboardTab(QtWidgets.QWidget):
         self.outstanding_table.setHorizontalHeaderLabels([
             _tr("Name"), _tr("Total Amount"), _tr("Total Paid"), _tr("Outstanding")
         ])
+<<<<<<< HEAD
         self.refresh_outstanding_btn.setText(_tr("Refresh"))
 
         self.btn_open_archive.setText(_tr("Open Archive Folder"))
+=======
+        self.refresh_outstanding_btn.setText(self.tr("Refresh Outstanding Payments"))
+
+        self.inventory_group.setTitle(self.tr("Inventory Summary"))
+        self.period_label.setText(self.tr("Inventory Period (days):"))
+        self.current_inventory_label.setText(self.tr("Loading inventory summary..."))
+        self.refresh_inventory_btn.setText(self.tr("Refresh Inventory Summary"))
+        self.archive_button.setText(self.tr("Archive Inventory"))
+        self.show_unpaid_btn.setText(self.tr("Show Unpaid Clients"))
+
+        self.client_summary_group.setTitle(self.tr("Client Summary"))
+        self.client_summary_label.setText(self.tr("Loading client summary..."))
+        self.refresh_summary_btn.setText(self.tr("Refresh Client Summary"))
+
+        self.archive_group.setTitle(self.tr("Archived Inventory"))
+>>>>>>> 650dc2b (design edit)
         self.archive_table.setHorizontalHeaderLabels([
             _tr("Period"), _tr("Total Receipts"), _tr("Total Outstanding"), _tr("Unpaid Clients")
         ])
 
+<<<<<<< HEAD
 
 # ---- standalone run ----
 if __name__ == "__main__":
@@ -709,4 +1038,18 @@ if __name__ == "__main__":
         apply_window_backdrop(w, prefer_mica=True)
     except Exception:
         pass
+=======
+if __name__ == "__main__":
+    import sys
+    app = QtWidgets.QApplication(sys.argv)
+    # Apply the modern theme automatically if available
+    try:
+        from modern_theme import ModernTheme
+        ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
+    except Exception:
+        pass
+    widget = DashboardTab()
+    widget.resize(1000, 720)
+    widget.show()
+>>>>>>> 650dc2b (design edit)
     sys.exit(app.exec_())

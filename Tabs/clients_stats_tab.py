@@ -3,11 +3,26 @@ from __future__ import annotations
 import csv
 import math
 import os
+<<<<<<< HEAD
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional
 
 from PyQt5 import QtWidgets, QtCore, QtGui
+=======
+import sys
+from PyQt5 import QtWidgets, QtCore
+from data.data import load_all_clients
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
+def _polish(*widgets):
+    """Re-apply QSS after setting dynamic properties."""
+    for w in widgets:
+        w.style().unpolish(w)
+        w.style().polish(w)
+        w.update()
+>>>>>>> 650dc2b (design edit)
 
 # ---------- i18n ----------
 def _tr(s: str) -> str:
@@ -187,6 +202,7 @@ class ClientStatsTab(QtWidgets.QWidget):
         self._build_ui()
         self.refresh_data()
 
+<<<<<<< HEAD
     # ---------- UI ----------
     def _build_ui(self):
         _apply_mpl_glass_theme()
@@ -281,11 +297,103 @@ class ClientStatsTab(QtWidgets.QWidget):
             self.fig = Figure(figsize=(5, 3), tight_layout=True)
             self.canvas = FigureCanvas(self.fig)
             # transparent canvas styling
+=======
+    # Optional translation helper hook (keeps your existing pattern)
+    def tr(self, text):
+        try:
+            from translation_helper import tr
+            return tr(text)
+        except Exception:
+            return text
+
+    def setup_ui(self):
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
+
+        # -------- Header card --------
+        header = QtWidgets.QFrame()
+        header.setProperty("modernCard", True)
+        hly = QtWidgets.QHBoxLayout(header)
+        hly.setContentsMargins(12, 12, 12, 12)
+        hly.setSpacing(8)
+
+        title = QtWidgets.QLabel(self.tr("Client Statistics"))
+        title.setStyleSheet("font-size: 16pt; font-weight: 700;")
+        hly.addWidget(title)
+        hly.addStretch(1)
+
+        self.refresh_btn = QtWidgets.QPushButton(self.tr("Refresh Statistics"))
+        self.refresh_btn.setProperty("variant", "ghost")
+        self.refresh_btn.setProperty("accent", "violet")
+        self.refresh_btn.clicked.connect(self.refresh_data)
+        hly.addWidget(self.refresh_btn)
+        _polish(self.refresh_btn)
+
+        root.addWidget(header)
+
+        # -------- Summary card --------
+        summary_card = QtWidgets.QGroupBox(self.tr("Summary"))
+        sc_ly = QtWidgets.QVBoxLayout(summary_card)
+        sc_ly.setContentsMargins(12, 12, 12, 12)
+        sc_ly.setSpacing(6)
+
+        self.summary_label = QtWidgets.QLabel(self.tr("Loading client summary..."))
+        self.summary_label.setStyleSheet("font-weight: 600;")
+        sc_ly.addWidget(self.summary_label)
+
+        root.addWidget(summary_card)
+
+        # -------- Payment Status (pie) card --------
+        payment_card = QtWidgets.QGroupBox(self.tr("Payment Status"))
+        pc_ly = QtWidgets.QVBoxLayout(payment_card)
+        pc_ly.setContentsMargins(12, 12, 12, 12)
+        pc_ly.setSpacing(6)
+
+        self.payment_fig = Figure(figsize=(4, 4), tight_layout=True)
+        self.payment_fig.set_facecolor("none")
+        self.payment_canvas = FigureCanvas(self.payment_fig)
+        self.payment_canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        pc_ly.addWidget(self.payment_canvas)
+
+        root.addWidget(payment_card)
+
+        # -------- Age Distribution (hist) card --------
+        age_card = QtWidgets.QGroupBox(self.tr("Age Distribution"))
+        ac_ly = QtWidgets.QVBoxLayout(age_card)
+        ac_ly.setContentsMargins(12, 12, 12, 12)
+        ac_ly.setSpacing(6)
+
+        self.age_fig = Figure(figsize=(4, 3), tight_layout=True)
+        self.age_fig.set_facecolor("none")
+        self.age_canvas = FigureCanvas(self.age_fig)
+        self.age_canvas.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        ac_ly.addWidget(self.age_canvas)
+
+        root.addWidget(age_card)
+        root.addStretch(1)
+
+    def refresh_data(self):
+        clients = load_all_clients() or []
+        total_clients = len(clients)
+
+        ages = []
+        total_age = 0.0
+        count_age = 0
+        total_revenue = 0.0
+        total_outstanding = 0.0
+        fully_paid = 0
+        not_fully_paid = 0
+
+        for client in clients:
+            # Age
+>>>>>>> 650dc2b (design edit)
             try:
                 self.canvas.setStyleSheet("background: transparent;")
                 self.fig.patch.set_alpha(0.0)
             except Exception:
                 pass
+<<<<<<< HEAD
             cv.addWidget(self.canvas)
             rv.addWidget(charts)
         else:
@@ -573,9 +681,67 @@ class ClientStatsTab(QtWidgets.QWidget):
         self.refresh_data()
 
 # ---- standalone run ----
+=======
+            # Payments
+            try:
+                tp = float(client.get("Total Paid", 0))
+                ta = float(client.get("Total Amount", 0))
+            except (ValueError, TypeError):
+                tp = ta = 0.0
+            total_revenue += tp
+            if tp >= ta:
+                fully_paid += 1
+            else:
+                not_fully_paid += 1
+                total_outstanding += max(0.0, ta - tp)
+
+        avg_age = (total_age / count_age) if count_age else 0.0
+
+        self.summary_label.setText(
+            f"{self.tr('Total Clients:')} {total_clients} | "
+            f"{self.tr('Average Age:')} {avg_age:.1f} | "
+            f"{self.tr('Total Revenue:')} {total_revenue:,.2f} | "
+            f"{self.tr('Outstanding:')} {total_outstanding:,.2f}"
+        )
+
+        # --- Payment Status Pie Chart ---
+        self.payment_fig.clear()
+        ax = self.payment_fig.add_subplot(111)
+        ax.set_facecolor("none")
+        if (fully_paid + not_fully_paid) > 0:
+            labels = [self.tr("Fully Paid"), self.tr("Not Fully Paid")]
+            sizes = [fully_paid, not_fully_paid]
+            wedges, texts, autotexts = ax.pie(
+                sizes, labels=labels, autopct="%1.1f%%", startangle=140
+            )
+            ax.axis("equal")
+        else:
+            ax.text(0.5, 0.5, self.tr("No payment data"),
+                    ha="center", va="center", transform=ax.transAxes)
+        self.payment_canvas.draw()
+
+        # --- Age Distribution Histogram ---
+        self.age_fig.clear()
+        ax2 = self.age_fig.add_subplot(111)
+        ax2.set_facecolor("none")
+        if ages:
+            # integer bins from min to max
+            lo, hi = int(min(ages)), int(max(ages))
+            bins = range(lo, hi + 2)
+            ax2.hist(ages, bins=bins, edgecolor="black")
+            ax2.set_xlabel(self.tr("Age"))
+            ax2.set_ylabel(self.tr("Number of Clients"))
+        else:
+            ax2.text(0.5, 0.5, self.tr("No age data"),
+                     ha="center", va="center", transform=ax2.transAxes)
+        ax2.set_title(self.tr("Age Distribution"))
+        self.age_canvas.draw()
+
+>>>>>>> 650dc2b (design edit)
 if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
+<<<<<<< HEAD
     try:
         # If you have the global theme, apply it
         from UI.design_system import apply_global_theme, apply_window_backdrop
@@ -591,3 +757,15 @@ if __name__ == "__main__":
     except Exception:
         pass
     sys.exit(app.exec_())
+=======
+    # Apply the modern theme automatically if available
+    try:
+        from modern_theme import ModernTheme
+        ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
+    except Exception:
+        pass
+    stats_tab = ClientStatsTab()
+    stats_tab.resize(900, 720)
+    stats_tab.show()
+    sys.exit(app.exec_())
+>>>>>>> 650dc2b (design edit)
