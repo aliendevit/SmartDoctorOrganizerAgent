@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # main.py
 import sys, warnings, importlib, traceback
 from pathlib import Path
@@ -118,6 +119,13 @@ class Notifier(QtCore.QObject):
     def info(self, title, msg, msecs=3500):
         try: self.tray.showMessage(title, msg, QtWidgets.QSystemTrayIcon.Information, msecs)
         except Exception: pass
+=======
+import sys
+from PyQt5 import QtWidgets, QtCore, QtGui
+from home_page import HomePage
+from Tabs.notification_tab import NotificationManager
+
+>>>>>>> 0e490db (no change)
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
