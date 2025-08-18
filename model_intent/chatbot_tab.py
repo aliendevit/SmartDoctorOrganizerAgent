@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # model_intent/chatbot_tab.py — Glass-matched Assistant (Gemma local)
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="PyQt5.*")
@@ -54,6 +55,21 @@ GEN_CFG = dict(
 )
 
 # ---------------- UI helpers ----------------
+=======
+# chatbot_tab.py
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="PyQt5.*")
+from PyQt5 import QtWidgets, QtCore, QtGui
+import json, re, datetime
+from hf_client import chat_stream
+
+# optional appointment storage hook (your data module)
+try:
+    from data.data import append_appointment
+except Exception:
+    append_appointment = None
+
+>>>>>>> 0ee5f75 (UI overhaul + modal fix + sqlite/mongo switch)
 def _polish(*widgets):
     for w in widgets:
         try:
@@ -61,6 +77,7 @@ def _polish(*widgets):
         except Exception:
             pass
 
+<<<<<<< HEAD
 def _escape(s: Any) -> str: return html.escape("" if s is None else str(s))
 
 def _is_greeting(t: str) -> bool:
@@ -309,10 +326,43 @@ class _Streamer(QtCore.QThread):
             ):
                 if self._stop: break
                 acc.append(piece)
+=======
+SYSTEM_PROMPT = (
+    "You are a concise medical front-desk & clinical assistant.\n"
+    "Answer briefly and clearly."
+)
+
+INTENT_PROMPT = (
+    "Decide the user's intent and extract fields as JSON.\n"
+    "intents: ['book_appointment','update_payment','create_report','small_talk']\n"
+    "Return ONLY JSON with keys: intent, name?, date?, time?, amount?, notes?."
+)
+
+class _Streamer(QtCore.QThread):
+    token = QtCore.pyqtSignal(str)
+    done = QtCore.pyqtSignal(str)
+    failed = QtCore.pyqtSignal(str)
+
+    def __init__(self, messages, system=SYSTEM_PROMPT, parent=None):
+        super().__init__(parent)
+        self.messages = messages
+        self.system = system
+        self._stop = False
+
+    def run(self):
+        try:
+            acc = []
+            for chunk in chat_stream(self.messages, temperature=0.2, max_new_tokens=320, system=self.system):
+                if self._stop:
+                    break
+                acc.append(chunk)
+                self.token.emit(chunk)
+>>>>>>> 0ee5f75 (UI overhaul + modal fix + sqlite/mongo switch)
             self.done.emit("".join(acc))
         except Exception as e:
             self.failed.emit(str(e))
 
+<<<<<<< HEAD
     def stop(self): self._stop = True
 
 # ---------------- ChatBot UI ----------------
@@ -340,11 +390,29 @@ class ChatBotTab(QtWidgets.QWidget):
     def tr(self, t):
         try:
             from features.translation_helper import tr
+=======
+    def stop(self):
+        self._stop = True
+
+
+class ChatBotTab(QtWidgets.QWidget):
+    appointmentCreated = QtCore.pyqtSignal(dict)  # emits when we book an appointment
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._messages = []  # OpenAI-style history
+        self._build_ui()
+
+    def tr(self, t):  # safe translator hook
+        try:
+            from translation_helper import tr
+>>>>>>> 0ee5f75 (UI overhaul + modal fix + sqlite/mongo switch)
             return tr(t)
         except Exception:
             return t
 
     def _build_ui(self):
+<<<<<<< HEAD
         p = _palette()
 
         root = QtWidgets.QVBoxLayout(self)
@@ -421,6 +489,44 @@ class ChatBotTab(QtWidgets.QWidget):
         _polish(self.btn_send, self.btn_stop)
         row.addWidget(self.input, 1);
         row.addWidget(self.btn_send);
+=======
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(10)
+
+        # Header card
+        header = QtWidgets.QFrame(); header.setProperty("modernCard", True)
+        hly = QtWidgets.QHBoxLayout(header); hly.setContentsMargins(12, 12, 12, 12)
+        title = QtWidgets.QLabel(self.tr("Assistant Bot (Gemma-3 local)"))
+        title.setStyleSheet("font-size:16pt; font-weight:700;")
+        hly.addWidget(title); hly.addStretch(1)
+        self.lbl_intent = QtWidgets.QLabel("")
+        self.lbl_intent.setStyleSheet("opacity:0.8;")
+        hly.addWidget(self.lbl_intent)
+        root.addWidget(header)
+
+        # Chat area
+        chat_card = QtWidgets.QFrame(); chat_card.setProperty("modernCard", True)
+        cly = QtWidgets.QVBoxLayout(chat_card); cly.setContentsMargins(12, 12, 12, 12)
+        self.view = QtWidgets.QTextBrowser()
+        self.view.setOpenExternalLinks(True)
+        self.view.setStyleSheet("font: 12pt 'Segoe UI';")
+        cly.addWidget(self.view, 1)
+        root.addWidget(chat_card, 1)
+
+        # Input row
+        row = QtWidgets.QHBoxLayout()
+        self.input = QtWidgets.QLineEdit()
+        self.input.setPlaceholderText(self.tr("Type your message…"))
+        self.btn_send = QtWidgets.QPushButton(self.tr("Send"))
+        self.btn_send.setProperty("accent","violet")
+        self.btn_stop = QtWidgets.QPushButton(self.tr("Stop"))
+        self.btn_stop.setProperty("variant","danger")
+        self.btn_stop.setEnabled(False)
+        _polish(self.btn_send, self.btn_stop)
+        row.addWidget(self.input, 1)
+        row.addWidget(self.btn_send)
+>>>>>>> 0ee5f75 (UI overhaul + modal fix + sqlite/mongo switch)
         row.addWidget(self.btn_stop)
         root.addLayout(row)
 
@@ -428,6 +534,7 @@ class ChatBotTab(QtWidgets.QWidget):
         self.btn_stop.clicked.connect(self._on_stop)
         self.input.returnPressed.connect(self._on_send)
 
+<<<<<<< HEAD
         # First message
         self._append_assistant(
             "Hello! I can show appointments, book (with confirmation), update payments, "
@@ -654,10 +761,45 @@ class ChatBotTab(QtWidgets.QWidget):
         self.btn_send.setEnabled(False); self.btn_stop.setEnabled(True)
         self._live_buf = []
         self._stream = _Streamer(self._build_chat_messages(), temperature=GEN_CFG["temperature"], parent=self)
+=======
+        # Warm greeting
+        self._append_assistant("Hello! I can book appointments, update payments, or draft quick reports.")
+
+    # ---- Chat helpers
+    def _append_user(self, text):
+        self.view.append(f"<p><b>You:</b> {QtWidgets.QStyle.escape(text)}</p>")
+
+    def _append_assistant(self, text):
+        self.view.append(f"<p style='color:#93c5fd'><b>Assistant:</b> {QtWidgets.QStyle.escape(text)}</p>")
+
+    def _append_stream(self, chunk):
+        cursor = self.view.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        cursor.insertText(chunk)
+        self.view.setTextCursor(cursor)
+        self.view.ensureCursorVisible()
+
+    def _on_send(self):
+        text = self.input.text().strip()
+        if not text or getattr(self, "_stream", None) is not None:
+            return
+
+        self._messages.append({"role":"user", "content": text})
+        self._append_user(text)
+        self.input.clear()
+        self.btn_send.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+
+        # Start streaming
+        self._append_assistant("")
+        self._stream = _Streamer(list(self._messages), parent=self)
+        self._stream.token.connect(self._append_stream)
+>>>>>>> 0ee5f75 (UI overhaul + modal fix + sqlite/mongo switch)
         self._stream.done.connect(self._on_done)
         self._stream.failed.connect(self._on_failed)
         self._stream.start()
 
+<<<<<<< HEAD
     def _build_chat_messages(self) -> List[Dict[str, str]]:
         msgs = [{
             "role": "system",
@@ -781,3 +923,102 @@ if __name__ == "__main__":
     except Exception:
         pass
     sys.exit(app.exec_())
+=======
+    def _on_stop(self):
+        if getattr(self, "_stream", None):
+            self._stream.stop()
+
+    def _on_failed(self, err):
+        self._append_assistant(f"\n[error] {err}")
+        self.btn_send.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self._stream = None
+
+    def _on_done(self, full_text):
+        # replace last assistant placeholder with full text in history
+        self._messages.append({"role":"assistant", "content": full_text})
+        self.btn_send.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self._stream = None
+
+        # Intent detection (fire-and-forget)
+        self._detect_intent(self._messages[-2]["content"], model_reply=full_text)
+
+    # ---- Intent routing
+    def _detect_intent(self, user_text, model_reply=""):
+        """
+        Ask the same local model to classify intent & fields (JSON).
+        """
+        q = [
+            {"role":"system","content": INTENT_PROMPT},
+            {"role":"user","content": user_text}
+        ]
+        json_buf = []
+        try:
+            for chunk in chat_stream(q, temperature=0.0, max_new_tokens=180):
+                json_buf.append(chunk)
+            raw = "".join(json_buf).strip()
+            data = self._safe_json_from_text(raw)
+        except Exception:
+            data = {}
+
+        intent = (data.get("intent") or "small_talk").strip()
+        self.lbl_intent.setText(self.tr("Intent: ") + intent)
+
+        if intent == "book_appointment":
+            appt = self._build_appt_from_fields(data, fallback=user_text)
+            if append_appointment:
+                try:
+                    append_appointment(appt)
+                except Exception:
+                    pass
+            self.appointmentCreated.emit(appt)
+            self._append_assistant(f"\n[Booked] {appt.get('Name')} — {appt.get('Appointment Date')} {appt.get('Appointment Time')}")
+        elif intent == "update_payment":
+            # You can call your payment update here
+            pass
+        elif intent == "create_report":
+            # Trigger your report agent here if you like
+            pass
+
+    def _safe_json_from_text(self, s: str):
+        """
+        Try to extract a JSON object from arbitrary text.
+        """
+        m = re.search(r'\{.*\}', s, flags=re.S)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                pass
+        return {}
+
+    def _build_appt_from_fields(self, fields: dict, fallback=""):
+        """
+        Normalize Name/Date/Time with reasonable defaults.
+        """
+        name = (fields.get("name") or "").strip() or "Unknown"
+        date = (fields.get("date") or "").strip()
+        time = (fields.get("time") or "").strip()
+
+        if not date or date.lower() == "today":
+            date = QtCore.QDate.currentDate().toString("dd-MM-yyyy")
+        # Quick human formats to dd-MM-yyyy if model returned yyyy-mm-dd
+        try:
+            if re.match(r"\d{4}-\d{2}-\d{2}", date):
+                dt = datetime.datetime.strptime(date, "%Y-%m-%d").date()
+                date = dt.strftime("%d-%m-%Y")
+        except Exception:
+            pass
+
+        if not time:
+            time = "12:00 PM"
+
+        return {
+            "Name": name,
+            "Appointment Date": date,
+            "Appointment Time": time,
+            "Notes": (fields.get("notes") or fallback),
+            "Source": "chatbot",
+        }
+>>>>>>> 0ee5f75 (UI overhaul + modal fix + sqlite/mongo switch)

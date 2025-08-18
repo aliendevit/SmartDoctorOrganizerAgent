@@ -129,41 +129,98 @@ from Tabs.notification_tab import NotificationManager
 >>>>>>> 0e490db (no change)
 =======
 # main.py
-import sys, os, importlib
-from PyQt5 import QtWidgets, QtGui, QtCore
-from modern_theme import ModernTheme
+# PyQt5 entry point for MedicalDoc AI
+# - Tabs: Extraction (Whisper+Agent), Dashboard, Appointments, Accounts, Client Stats, ChatBot
+# - Robust imports that try both local and Tabs.* variants (and common typos)
+# - System tray notifier
+# - Forwards appointments and normalizes missing date/time
+# - Wires ChatBot signals into the same flows as Extraction
 
-# Ensure the current folder is on sys.path
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-if APP_DIR not in sys.path:
-    sys.path.insert(0, APP_DIR)
+import sys
+import warnings
+import importlib
+from PyQt5 import QtWidgets, QtCore, QtGui
 
-def _import(symbol, candidates):
+# Silence PyQt sip deprecation warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+# ---------- Safe translation helper (fallback if missing) ----------
+def _ensure_translation_helper():
+    try:
+        import translation_helper  # noqa: F401
+    except Exception:
+        import types
+        th = types.ModuleType("translation_helper")
+        th.tr = lambda text: text
+        sys.modules["translation_helper"] = th
+
+_ensure_translation_helper()
+
+# ---------- Import helpers ----------
+def _import_class(module_name: str, class_name: str):
+    """Try importing (module_name, class_name). Return class or None."""
+    try:
+        mod = importlib.import_module(module_name)
+        return getattr(mod, class_name, None)
+    except Exception:
+        return None
+
+def _import_first(candidates):
     """
-    Try importing `symbol` from a list of candidate module names.
-    Returns the attribute or None if not found.
+    Try a list of (module_name, class_name) tuples in order; return the first class that imports.
     """
-    for modname in candidates:
-        try:
-            mod = importlib.import_module(modname)
-            return getattr(mod, symbol)
-        except Exception:
-            pass
+    for mod, cls in candidates:
+        got = _import_class(mod, cls)
+        if got:
+            return got
     return None
 
-# ---- Flexible imports (works for flat files or packages like Tabs/, widgets/) ----
-HomePage = _import("HomePage", (
-    "home_page",              # ./home_page.py
-    "Tabs.home_page",         # ./Tabs/home_page.py
-    "pages.home_page",        # ./pages/home_page.py
-))
+# Prefer local modules first, then Tabs.*, and include common filename variants
+ExtractionTab  = _import_first([
+    ("extraction_tab", "ExtractionTab"),
+    ("Tabs.extraction_tab", "ExtractionTab"),
+])
+DashboardTab   = _import_first([
+    ("dashboard_tab", "DashboardTab"),
+    ("Tabs.dashboard_tab", "DashboardTab"),
+])
+AppointmentTab = _import_first([
+    ("appointment_tab", "AppointmentTab"),
+    ("Tabs.appointment_tab", "AppointmentTab"),
+])
+AccountsTab    = _import_first([
+    ("accounts_tab", "AccountsTab"),
+    ("account_tab",  "AccountsTab"),
+    ("Tabs.accounts_tab", "AccountsTab"),
+    ("Tabs.account_tab",  "AccountsTab"),
+])
+ClientStatsTab = _import_first([
+    ("client_stats_tab",  "ClientStatsTab"),
+    ("clients_stats_tab", "ClientStatsTab"),   # tolerate plural typo
+    ("Tabs.client_stats_tab",  "ClientStatsTab"),
+    ("Tabs.clients_stats_tab", "ClientStatsTab"),
+])
+ChatBotTab     = _import_first([
+    ("chatbot_tab", "ChatBotTab"),
+    ("Tabs.chatbot_tab", "ChatBotTab"),
+])
 
-NotificationManager = _import("NotificationManager", (
-    "notification_tab",       # ./notification_tab.py
-    "Tabs.notification_tab",  # ./Tabs/notification_tab.py
-    "widgets.notification_tab" # ./widgets/notification_tab.py
-))
+# ---------- Placeholder if a tab is missing ----------
+class _MissingTab(QtWidgets.QWidget):
+    def __init__(self, title: str, missing_what: str, parent=None):
+        super().__init__(parent)
+        lay = QtWidgets.QVBoxLayout(self)
+        lbl = QtWidgets.QLabel(
+            f"<b>{title}</b><br><br>"
+            f"Module not found or failed to import:<br>"
+            f"<code>{missing_what}</code><br><br>"
+            f"Make sure the file exists and any dependencies (e.g., Whisper/Agent) are installed."
+        )
+        lbl.setTextFormat(QtCore.Qt.RichText)
+        lbl.setAlignment(QtCore.Qt.AlignCenter)
+        lay.addStretch(1); lay.addWidget(lbl); lay.addStretch(1)
 
+<<<<<<< HEAD
 def get_icon():
     icon = QtGui.QIcon(os.path.join(APP_DIR, "icon.png"))
     if icon.isNull():
@@ -177,10 +234,24 @@ def get_icon():
         icon = QtGui.QIcon(pm)
     return icon
 >>>>>>> 650dc2b (design edit)
+=======
+# ---------- Notifier ----------
+class Notifier(QtCore.QObject):
+    def __init__(self, tray_icon: QtWidgets.QSystemTrayIcon, parent=None):
+        super().__init__(parent)
+        self.tray = tray_icon
+    def info(self, title: str, message: str, msecs: int = 3500):
+        try:
+            self.tray.showMessage(title, message, QtWidgets.QSystemTrayIcon.Information, msecs)
+        except Exception:
+            pass
+>>>>>>> 0ee5f75 (UI overhaul + modal fix + sqlite/mongo switch)
 
+# ---------- Main Window ----------
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
+<<<<<<< HEAD
 <<<<<<< HEAD
         self.setWindowTitle("MedicalDoc AI Demo v 1.9.3")
         self.resize(1200, 800)
@@ -365,74 +436,83 @@ class MainWindow(QtWidgets.QMainWindow):
         self._setup_toolbar()
         self._setup_ui()
         self._setup_tray()
+=======
+        self.setWindowTitle("MedicalDoc AI")
+        self.resize(1200, 800)
+>>>>>>> 0ee5f75 (UI overhaul + modal fix + sqlite/mongo switch)
 
-    def _setup_toolbar(self):
-        toolbar = QtWidgets.QToolBar()
-        toolbar.setMovable(False)
-        toolbar.setIconSize(QtCore.QSize(20, 20))
-        self.addToolBar(QtCore.Qt.TopToolBarArea, toolbar)
+        # Tray
+        self.tray_icon = QtWidgets.QSystemTrayIcon(self)
+        self.tray_icon.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_ComputerIcon))
+        menu = QtWidgets.QMenu()
+        menu.addAction("Show", self.showNormal)
+        menu.addAction("Quit", QtWidgets.qApp.quit)
+        self.tray_icon.setContextMenu(menu)
+        self.tray_icon.show()
+        self.notifier = Notifier(self.tray_icon, self)
 
-        search = QtWidgets.QLineEdit()
-        search.setPlaceholderText("Search clients, appointments, notes…")
-        search.setFixedWidth(360)
-        search.setProperty("variant", "ghost")
-        act = QtWidgets.QWidgetAction(toolbar)
-        act.setDefaultWidget(search)
-        toolbar.addAction(act)
+        # Tabs
+        self.tabs = QtWidgets.QTabWidget()
+        self.setCentralWidget(self.tabs)
+        self._make_tabs()
 
-        toolbar.addSeparator()
+        self.statusBar().showMessage("Ready")
+        self._load_settings()
 
-        theme_btn = QtWidgets.QPushButton("Toggle theme")
-        theme_btn.setProperty("variant", "ghost")
-        theme_btn.clicked.connect(lambda: ModernTheme.toggle(QtWidgets.QApplication.instance()))
-        toolbar.addWidget(theme_btn)
+    # ---- Helpers ----
+    def tr(self, text: str) -> str:
+        try:
+            from translation_helper import tr
+            return tr(text)
+        except Exception:
+            return text
 
-    def _setup_ui(self):
-        container = QtWidgets.QWidget()
-        root = QtWidgets.QVBoxLayout(container)
-        root.setContentsMargins(16, 12, 16, 16)
-        root.setSpacing(12)
+    def _load_settings(self):
+        s = QtCore.QSettings("YourOrg", "MedicalDocAI")
+        geom = s.value("main/geometry")
+        if geom:
+            self.restoreGeometry(geom)
 
-        banner = QtWidgets.QFrame()
-        banner.setProperty("modernCard", True)
-        b_ly = QtWidgets.QHBoxLayout(banner)
-        title = QtWidgets.QLabel("Welcome to MediAgent AI")
-        title.setStyleSheet("font-size: 16pt; font-weight: 700;")
-        b_ly.addWidget(title)
-        b_ly.addStretch(1)
-        quick = QtWidgets.QPushButton("New client")
-        quick.setProperty("variant", "ghost")
-        b_ly.addWidget(quick)
-        root.addWidget(banner)
+    def _save_settings(self):
+        s = QtCore.QSettings("YourOrg", "MedicalDocAI")
+        s.setValue("main/geometry", self.saveGeometry())
 
-        # Use your HomePage if available; otherwise show a minimal fallback
-        if HomePage is not None:
-            central = HomePage()
-        else:
-            tabs = QtWidgets.QTabWidget()
-            tabs.addTab(QtWidgets.QLabel("Home"), "Home")
-            tabs.addTab(QtWidgets.QLabel("Appointments"), "Appointments")
-            tabs.addTab(QtWidgets.QLabel("Accounts"), "Accounts")
-            central = tabs
+    def closeEvent(self, event: QtGui.QCloseEvent):
+        self._save_settings()
+        super().closeEvent(event)
 
-        if isinstance(central, QtWidgets.QTabWidget):
-            central.setTabPosition(QtWidgets.QTabWidget.West)
-            central.setIconSize(QtCore.QSize(18, 18))
-            central.setDocumentMode(True)
-            central.setElideMode(QtCore.Qt.ElideRight)
-            central.setStyleSheet(central.styleSheet() + " QTabBar::tab { min-width: 180px; } ")
-        root.addWidget(central)
+    # ---- Build tabs + wire signals ----
+    def _make_tabs(self):
+        # Extraction (Whisper + Agent live here)
+        self.extraction = ExtractionTab() if ExtractionTab else _MissingTab("Extraction", "extraction_tab.ExtractionTab")
 
-        self.setCentralWidget(container)
-
-    def _setup_tray(self):
-        # Only set up tray if the class was successfully imported and a tray exists
-        if NotificationManager is not None and QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
-            self.tray_icon = NotificationManager(get_icon(), self)
-            self.tray_icon.show()
+        # Appointments (handle constructors with/without tray_icon)
+        if AppointmentTab:
             try:
-                self.tray_icon.show_notification("MediAgent AI is running")
+                self.appointments = AppointmentTab(tray_icon=self.tray_icon)
+            except TypeError:
+                self.appointments = AppointmentTab()
+                if hasattr(self.appointments, "set_tray_icon"):
+                    try: self.appointments.set_tray_icon(self.tray_icon)
+                    except Exception: pass
+        else:
+            self.appointments = _MissingTab("Appointments", "appointment_tab.AppointmentTab")
+
+        # Dashboard
+        self.dashboard = DashboardTab() if DashboardTab else _MissingTab("Dashboard", "dashboard_tab.DashboardTab")
+
+        # Accounts
+        self.accounts = AccountsTab() if AccountsTab else _MissingTab("Accounts", "accounts_tab/ account_tab AccountsTab")
+
+        # Client Stats
+        self.client_stats = ClientStatsTab() if ClientStatsTab else _MissingTab("Client Stats", "client(s)_stats_tab.ClientStatsTab")
+
+        # ChatBot
+        if ChatBotTab:
+            try:
+                self.chatbot = ChatBotTab()
             except Exception:
+<<<<<<< HEAD
                 pass
 >>>>>>> 650dc2b (design edit)
 
@@ -463,13 +543,136 @@ def main():
 =======
     # Keep app alive when window closed (so tray stays)
     app.setQuitOnLastWindowClosed(False)
+=======
+                # If their ChatBot constructor requires args, try safe default
+                self.chatbot = ChatBotTab()
+        else:
+            self.chatbot = _MissingTab("ChatBot", "chatbot_tab.ChatBotTab")
 
-    # Apply the modern theme
-    ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
+        # Add tabs
+        self.tabs.addTab(self.extraction, self.tr("Extraction"))
+        self.tabs.addTab(self.appointments, self.tr("Appointments"))
+        self.tabs.addTab(self.dashboard, self.tr("Dashboard"))
+        self.tabs.addTab(self.accounts, self.tr("Accounts"))
+        self.tabs.addTab(self.client_stats, self.tr("Client Stats"))
+        self.tabs.addTab(self.chatbot, self.tr("Assistant Bot"))
+
+        # Wire Extraction signals (if they exist)
+        if hasattr(self.extraction, "dataProcessed"):
+            try: self.extraction.dataProcessed.connect(self._on_data_processed)
+            except Exception: pass
+        if hasattr(self.extraction, "appointmentProcessed"):
+            try: self.extraction.appointmentProcessed.connect(self._on_appointment_processed)
+            except Exception: pass
+        if hasattr(self.extraction, "switchToAppointments"):
+            try: self.extraction.switchToAppointments.connect(self._switch_to_appointments)
+            except Exception: pass
+
+        # Wire ChatBot signals into same flows
+        if hasattr(self.chatbot, "appointmentCreated"):
+            try: self.chatbot.appointmentCreated.connect(self._on_appointment_processed)
+            except Exception: pass
+
+        if hasattr(self.chatbot, "requestCreateReport"):
+            def _open_extraction_for_report(name, rtype):
+                idx = self.tabs.indexOf(self.extraction)
+                if idx >= 0:
+                    self.tabs.setCurrentIndex(idx)
+                try:
+                    # Optionally seed Extraction input with a hint
+                    if hasattr(self.extraction, "input_text"):
+                        self.extraction.input_text.setPlainText(f"Create {rtype} for {name}.")
+                except Exception:
+                    pass
+            try: self.chatbot.requestCreateReport.connect(_open_extraction_for_report)
+            except Exception: pass
+
+    # ---- Utils ----
+    def _normalize_appointment(self, data: dict) -> dict:
+        """Guarantee Name/Date/Time for the Appointments tab (avoid 'Not Specified')."""
+        appt = dict(data or {})
+        name = (appt.get("Name") or "").strip() or "Unknown"
+        date = (appt.get("Appointment Date") or "").strip()
+        time = (appt.get("Appointment Time") or "").strip()
+        if not date or date.lower() == "not specified":
+            date = QtCore.QDate.currentDate().toString("dd-MM-yyyy")
+        if not time or time.lower() == "not specified":
+            time = "12:00 PM"
+        appt["Name"] = name
+        appt["Appointment Date"] = date
+        appt["Appointment Time"] = time
+        return appt
+
+    # ---- Slots ----
+    @QtCore.pyqtSlot(dict)
+    def _on_data_processed(self, data: dict):
+        # Ask other tabs to refresh if they expose such methods
+        for widget, method_name in [
+            (self.dashboard, "refresh_data"),
+            (self.accounts, "update_table"),
+            (self.client_stats, "refresh_data"),
+        ]:
+            if hasattr(widget, method_name):
+                try: getattr(widget, method_name)()
+                except Exception: pass
+        name = data.get("Name", "Unknown")
+        self.notifier.info("Extraction", f"Processed data for {name}")
+
+    @QtCore.pyqtSlot(dict)
+    def _on_appointment_processed(self, data: dict):
+        appt = self._normalize_appointment(data)
+        try:
+            if hasattr(self.appointments, "add_appointment"):
+                self.appointments.add_appointment(appt)
+        except Exception:
+            pass
+        # Auto-switch & highlight
+        self._switch_to_appointments(appt.get("Name", "Unknown"))
+
+    @QtCore.pyqtSlot(str)
+    def _switch_to_appointments(self, client_name: str):
+        idx = self.tabs.indexOf(self.appointments)
+        if idx >= 0:
+            self.tabs.setCurrentIndex(idx)
+            if hasattr(self.appointments, "highlight_client"):
+                try: self.appointments.highlight_client(client_name)
+                except Exception: pass
+        self.notifier.info("Automation", f"Switched to Appointments for {client_name}")
+
+# ---------- App bootstrap ----------
+def apply_theme(app: QtWidgets.QApplication):
+    try:
+        from modern_theme import ModernTheme
+        ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
+    except Exception:
+        app.setStyle("Fusion")
+        pal = app.palette()
+        pal.setColor(QtGui.QPalette.Window, QtGui.QColor("#f6f7f9"))
+        pal.setColor(QtGui.QPalette.Base, QtGui.QColor("#ffffff"))
+        pal.setColor(QtGui.QPalette.Button, QtGui.QColor("#4f46e5"))
+        pal.setColor(QtGui.QPalette.ButtonText, QtGui.QColor("#ffffff"))
+        app.setPalette(pal)
+
+def main():
+    QtCore.QCoreApplication.setOrganizationName("YourOrg")
+    QtCore.QCoreApplication.setApplicationName("MedicalDocAI")
+>>>>>>> 0ee5f75 (UI overhaul + modal fix + sqlite/mongo switch)
+
+    app = QtWidgets.QApplication(sys.argv)
+    apply_theme(app)
 
     win = MainWindow()
     win.show()
+<<<<<<< HEAD
 >>>>>>> 650dc2b (design edit)
+=======
+
+    try:
+        win.notifier.info("MedicalDoc AI", "Ready.")
+    except Exception:
+        pass
+
+>>>>>>> 0ee5f75 (UI overhaul + modal fix + sqlite/mongo switch)
     sys.exit(app.exec_())
 
 if __name__ == "__main__":

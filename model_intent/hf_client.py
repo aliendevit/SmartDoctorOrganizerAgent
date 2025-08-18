@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # model_intent/hf_client.py
 # Local HuggingFace client for Gemma-3 270M-IT with:
 # - chat template usage (apply_chat_template)
@@ -149,3 +150,28 @@ def chat_once(
     ):
         buf.append(ch)
     return "".join(buf)
+=======
+# llm_client.py
+# OpenAI-compatible client that points to Ollama (Gemma) by default.
+# pip install openai httpx
+
+import os
+from openai import OpenAI
+
+BASE_URL = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")
+API_KEY  = os.environ.get("LLM_API_KEY",  "ollama")  # Ollama ignores the key but the SDK requires one
+MODEL    = os.environ.get("LLM_MODEL",    "gemma:2b-instruct")
+
+_client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
+
+def chat(messages, *, temperature=0.2, stream=False):
+    """
+    messages = [{"role":"system"/"user"/"assistant", "content":"..."}]
+    """
+    return _client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        temperature=temperature,
+        stream=stream,
+    )
+>>>>>>> 0ee5f75 (UI overhaul + modal fix + sqlite/mongo switch)
