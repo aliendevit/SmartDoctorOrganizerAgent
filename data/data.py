@@ -1,5 +1,6 @@
 # data/data.py
 # Unified JSON storage for clients & appointments.
+# Used by: AccountsTab, DashboardTab, ClientStatsTab, AppointmentTab, ExtractionTab, etc.
 
 import os, json
 from typing import List, Dict, Tuple
@@ -33,13 +34,16 @@ def _norm_name(name: str) -> str:
 
 # ---------- Clients ----------
 def load_all_clients() -> List[Dict]:
+    """Return the full clients list."""
     items = _read_json(CLIENTS_FILE)
     return items if isinstance(items, list) else []
 
 def save_all_clients(items: List[Dict]) -> bool:
+    """Overwrite all clients."""
     return _write_json(CLIENTS_FILE, list(items or []))
 
 def _compute_money_fields(rec: Dict) -> Dict:
+    """Ensure numeric money fields are consistent."""
     try:
         tp = float(rec.get("Total Paid", 0) or 0)
     except Exception:
@@ -53,26 +57,10 @@ def _compute_money_fields(rec: Dict) -> Dict:
     rec["Owed"] = max(0.0, ta - tp)
     return rec
 
-def _normalize_client(rec: Dict) -> Dict:
-    """Ensure expected keys exist. Image is optional."""
-    rec = dict(rec or {})
-    rec.setdefault("Name", "")
-    rec.setdefault("Age", "")
-    rec.setdefault("Symptoms", [])
-    rec.setdefault("Notes", "")
-    rec.setdefault("Summary", "")
-    rec.setdefault("Date", "")
-    rec.setdefault("Appointment Date", "")
-    rec.setdefault("Appointment Time", "")
-    rec.setdefault("Follow-Up Date", "")
-    # Optional photo:
-    if "Image" in rec and not isinstance(rec["Image"], str):
-        rec["Image"] = ""
-    return _compute_money_fields(rec)
-
 def insert_client(rec: Dict) -> bool:
     """
     Upsert a client by Name. If Name missing, store as 'Unknown (N)'.
+    Returns True on success.
     """
     items = load_all_clients()
     name = (rec.get("Name") or "").strip()
@@ -80,15 +68,12 @@ def insert_client(rec: Dict) -> bool:
         name = f"Unknown ({len(items)+1})"
         rec["Name"] = name
 
-    rec = _normalize_client(rec)
+    rec = _compute_money_fields(dict(rec))
     key = _norm_name(name)
 
     for i, it in enumerate(items):
         if _norm_name(it.get("Name")) == key:
-            # merge while preserving fields not provided
-            merged = dict(it)
-            merged.update({k: v for k, v in rec.items() if v not in (None, "") or k in ("Age","Total Paid","Total Amount","Owed")})
-            items[i] = _compute_money_fields(merged)
+            items[i] = {**it, **rec}
             break
     else:
         items.append(rec)
@@ -96,43 +81,37 @@ def insert_client(rec: Dict) -> bool:
     return save_all_clients(items)
 
 def update_account_in_db(client_name: str, updated: Dict) -> bool:
+    """
+    Update or insert an account record matching client_name (case-insensitive).
+    """
     items = load_all_clients()
     key = _norm_name(client_name)
-    updated = _normalize_client(updated)
-    updated["Name"] = (updated.get("Name") or client_name or "").strip() or client_name
+    updated = _compute_money_fields(dict(updated or {}))
+    updated["Name"] = updated.get("Name", client_name)
 
     for i, it in enumerate(items):
         if _norm_name(it.get("Name")) == key:
-            merged = dict(it)
-            merged.update(updated)
-            items[i] = _compute_money_fields(merged)
+            items[i] = {**it, **updated}
             break
     else:
         items.append(updated)
 
     return save_all_clients(items)
 
-def update_client_photo(client_name: str, image_path: str) -> bool:
-    """Convenience: update only the Image path."""
-    items = load_all_clients()
-    key = _norm_name(client_name)
-    for i, it in enumerate(items):
-        if _norm_name(it.get("Name")) == key:
-            it = dict(it)
-            it["Image"] = image_path or ""
-            items[i] = it
-            return save_all_clients(items)
-    # If not found, create a minimal record
-    return insert_client({"Name": client_name, "Image": image_path or ""})
-
 # ---------- Appointments ----------
 def load_appointments() -> List[Dict]:
+    """Return list of appointment dicts."""
     return _read_json(APPOINTMENTS_FILE)
 
 def save_appointments(items: List[Dict]) -> bool:
+    """Overwrite all appointments."""
     return _write_json(APPOINTMENTS_FILE, list(items or []))
 
 def append_appointment(appt: Dict) -> Tuple[bool, List[Dict]]:
+    """
+    Append or update an appointment. De-duplicate by (Name, Date, Time).
+    Returns (changed, new_list).
+    """
     items = load_appointments()
     key = (
         _norm_name(appt.get("Name")),

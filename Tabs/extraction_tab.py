@@ -1,4 +1,11 @@
-# extraction_tab.py — Glass-matched Clinical Extraction (senior edition)
+# extraction_tab.py
+# Extraction tab (self-contained):
+# - Voice input (Whisper optional) with Auto/Arabic/English + Translate-to-English
+# - Modern UI; ghost/amber button text visible immediately
+# - Parses text -> patient dict; emits signals with normalized appointment
+# - Built-in Agent simulator (no external deps) showing 0.7s-per-line progress
+# - Actions: insert_db (if data.data available), followup_rule, tag_status, generate_pdf, write_json
+# Python 3.8+
 
 import os
 import re
@@ -6,62 +13,21 @@ import json
 import tempfile
 from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Tuple
-
+from smart_nlp import SmartExtractor
 from PyQt5 import QtWidgets, QtCore, QtGui
-<<<<<<< HEAD
-=======
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
-def _polish(*widgets):
-    for w in widgets:
-        w.style().unpolish(w)
-        w.style().polish(w)
-        w.update()
->>>>>>> 650dc2b (design edit)
-
-# ---------- Global design tokens (safe fallback if design_system not present)
-try:
-    from UI.design_system import COLORS as DS_COLORS
-except Exception:
-    DS_COLORS = {
-        "text": "#1f2937", "textDim": "#334155", "muted": "#64748b",
-        "primary": "#3A8DFF", "info": "#2CBBA6", "success": "#7A77FF",
-        "stroke": "#E5EFFA", "panel": "rgba(255,255,255,0.55)",
-        "panelInner": "rgba(255,255,255,0.65)", "inputBg": "rgba(255,255,255,0.88)",
-        "stripe": "rgba(240,247,255,0.65)", "selBg": "#3A8DFF", "selFg": "#ffffff",
-    }
-
-<<<<<<< HEAD
-REPORTLAB_OK = True
-try:
-    from reportlab.lib.pagesizes import letter
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-    from reportlab.lib import colors
-    from reportlab.lib.styles import getSampleStyleSheet
-except Exception:
-    REPORTLAB_OK = False
-    letter = SimpleDocTemplate = Paragraph = Spacer = Table = TableStyle = None
-    colors = getSampleStyleSheet = None
-=======
-# If spaCy model not installed, you can comment the next line temporarily
-nlp = spacy.load("en_core_web_sm")
->>>>>>> 650dc2b (design edit)
-
 import speech_recognition as sr
-from utils.app_paths import reports_dir
+# top of file
+from smart_nlp import SmartExtractor
+_EXTRACTOR = SmartExtractor()
 
-<<<<<<< HEAD
-# ---------- Optional SmartExtractor ----------
-_EXTRACTOR = None
-try:
-    from nlp.smart_nlp import SmartExtractor
-    _EXTRACTOR = SmartExtractor()
-except Exception:
-    _EXTRACTOR = None
+def parse_patient_info(text):
+    return _EXTRACTOR.extract(text)
 
-# ---------- Optional spaCy ----------
+# ---------- Optional NLP ----------
 try:
     import spacy
     try:
@@ -71,6 +37,13 @@ try:
 except Exception:
     NLP = None
 
+# ---------- Optional dateutil ----------
+try:
+    from dateutil.relativedelta import relativedelta
+    DATEUTIL_AVAILABLE = True
+except Exception:
+    DATEUTIL_AVAILABLE = False
+
 # ---------- Optional faster-whisper ----------
 try:
     from faster_whisper import WhisperModel
@@ -79,130 +52,27 @@ except Exception:
     WhisperModel = None
     WHISPER_OK = False
 
-# ---------- i18n helper ----------
+# ---------- Safe translation helper ----------
 def _tr(obj, text: str) -> str:
     try:
-        from features.translation_helper import tr
+        from translation_helper import tr
         return tr(text)
     except Exception:
         return text
 
-# ---------- small style helper ----------
+# ---------- Style helper ----------
 def _polish(*widgets):
     for w in widgets:
         try:
-            w.style().unpolish(w); w.style().polish(w); w.update()
+            w.style().unpolish(w)
+            w.style().polish(w)
+            w.update()
         except Exception:
             pass
 
-# ====================== Parsing helpers ======================
-_DATE_RX = re.compile(r'(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})')
-_TIME_RX = re.compile(r'(\d{1,2}:\d{2}\s*[APMapm]{2}|\d{1,2}:\d{2})')
-_AR_CHARS = re.compile(r'[\u0600-\u06FF]')
-
-def _today_str() -> str:
-    return QtCore.QDate.currentDate().toString("dd-MM-yyyy")
-
-def _safe_dt_parse(date_str: str, fmt_list=("%d-%m-%Y","%d/%m/%Y","%d-%m-%y","%d/%m/%y","%Y-%m-%d")) -> str:
-    s = (date_str or "").strip()
-    for fmt in fmt_list:
-        try:
-            return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
-        except Exception:
-            pass
-    return _today_str()
-
-def _norm_time(s: str) -> str:
-    s = (s or "").strip()
-    for fmt in ("%I:%M %p","%I:%M%p","%H:%M"):
-        try:
-            dt = datetime.strptime(s, fmt)
-            return dt.strftime("%I:%M %p").lstrip("0")
-        except Exception:
-            pass
-    return "12:00 PM"
-
-def _fallback_parse_patient_info(text: str) -> Dict:
-    text = (text or "").strip()
-    name = "Unknown"
-
-    m_name = re.search(r'(?:Patient|Name)\s*[:\-]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', text)
-    if m_name:
-        name = m_name.group(1)
-
-    m_age = re.search(r'\b(?:age|aged)\s*[:\-]?\s*(\d{1,3})\b', text, re.I)
-    age = int(m_age.group(1)) if m_age else ""
-
-    symptoms = []
-    m_sym = re.search(r'(?:complains of|symptoms?[:\-]?)\s+([^\.\n]+)', text, re.I)
-    if m_sym:
-        symptoms = [s.strip() for s in re.split(r'[,\u060C]+', m_sym.group(1)) if s.strip()]
-
-    appt_date = None; appt_time = None
-    m_d = _DATE_RX.search(text); m_t = _TIME_RX.search(text)
-    if m_d: appt_date = _safe_dt_parse(m_d.group(1))
-    if m_t: appt_time = _norm_time(m_t.group(1))
-    if not appt_date:
-        lo = text.lower()
-        if "today" in lo: appt_date = _today_str()
-        elif "tomorrow" in lo:
-            appt_date = QtCore.QDate.currentDate().addDays(1).toString("dd-MM-yyyy")
-
-    summary = ""
-    m_sum = re.search(r'(?:summary)[:\-]\s*(.+)', text, re.I)
-    if m_sum:
-        summary = m_sum.group(1).strip()
-    if not summary:
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        summary = " ".join(sentences[:2]).strip() if sentences else ""
-
-    follow_up = ""
-    m_fu = re.search(r'(?:follow[- ]?up)[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|today|tomorrow)', text, re.I)
-    if m_fu:
-        v = (m_fu.group(1) or "").lower()
-        if v == "today":
-            follow_up = _today_str()
-        elif v == "tomorrow":
-            follow_up = QtCore.QDate.currentDate().addDays(1).toString("dd-MM-yyyy")
-        else:
-            follow_up = _safe_dt_parse(v)
-
-    return {
-        "Name": name,
-        "Age": age,
-        "Symptoms": symptoms,
-        "Notes": "",
-        "Date": _today_str(),
-        "Appointment Date": appt_date or "Not Specified",
-        "Appointment Time": appt_time or "Not Specified",
-        "Summary": summary or "—",
-        "Follow-Up Date": follow_up or "Not Specified",
-    }
-
-def parse_patient_info(text: str) -> Dict:
-    if _EXTRACTOR:
-        try:
-            data = _EXTRACTOR.extract(text) or {}
-            data = dict(data)
-            data.setdefault("Name", "Unknown")
-            data.setdefault("Date", _today_str())
-            ad = data.get("Appointment Date") or "Not Specified"
-            at = data.get("Appointment Time") or "Not Specified"
-            ad = _safe_dt_parse(ad) if ad not in ("", None, "Not Specified") else "Not Specified"
-            at = _norm_time(at) if at not in ("", None, "Not Specified") else "Not Specified"
-            data["Appointment Date"] = ad
-            data["Appointment Time"] = at
-            data.setdefault("Summary", "—")
-            data.setdefault("Follow-Up Date", "Not Specified")
-            data.setdefault("Symptoms", data.get("Symptoms") or [])
-            data.setdefault("Notes", data.get("Notes") or "")
-            return data
-        except Exception:
-            pass
-    return _fallback_parse_patient_info(text)
-
-# ====================== Whisper helpers ======================
+# ---------- Whisper helpers ----------
 USE_WHISPER_BY_DEFAULT = True
+_AR_CHARS = re.compile(r'[\u0600-\u06FF]')
 
 def _make_whisper_model(size: str):
     if not WHISPER_OK:
@@ -222,11 +92,13 @@ def _make_whisper_model(size: str):
             last_err = e
     raise RuntimeError(f"Whisper init failed. Last error: {last_err}")
 
-def _lang_to_codes(choice: str):
+def _lang_to_codes(choice: str) -> Tuple[str, str]:
+    # returns (whisper_lang, google_lang); None => auto
     if choice == "ar": return "ar", "ar-SA"
     if choice == "en": return "en", "en-US"
     return None, None
 
+# ---------- Background Whisper thread ----------
 class _WhisperThread(QtCore.QThread):
     result = QtCore.pyqtSignal(str)
     error  = QtCore.pyqtSignal(str)
@@ -241,7 +113,9 @@ class _WhisperThread(QtCore.QThread):
         tmp_path = None
         try:
             fd, tmp_path = tempfile.mkstemp(suffix=".wav")
-            os.write(fd, self.wav_bytes); os.close(fd)
+            os.write(fd, self.wav_bytes)
+            os.close(fd)
+
             if not hasattr(_WhisperThread, "_model"):
                 _WhisperThread._model = _make_whisper_model(self.model_size)
             model = _WhisperThread._model
@@ -263,17 +137,7 @@ class _WhisperThread(QtCore.QThread):
                 try: os.remove(tmp_path)
                 except Exception: pass
 
-# ====================== Voice Input (no pause control) ======================
-=======
-def _polish(*widgets):
-    """Re-apply QSS after setting dynamic properties."""
-    for w in widgets:
-        w.style().unpolish(w)
-        w.style().polish(w)
-        w.update()
-
-# -------------------- Voice Input Widget --------------------
->>>>>>> 650dc2b (design edit)
+# ---------- Voice Input Widget ----------
 class VoiceInputWidget(QtWidgets.QWidget):
     textReady = QtCore.pyqtSignal(str)
 
@@ -284,7 +148,6 @@ class VoiceInputWidget(QtWidgets.QWidget):
         elif lang_l.startswith("en"): self.choice = "en"
         else: self.choice = "auto"
 
-<<<<<<< HEAD
         self.use_whisper = USE_WHISPER_BY_DEFAULT if use_whisper is None else bool(use_whisper)
         self.whisper_model_size = whisper_model_size
         self._build_ui()
@@ -293,6 +156,9 @@ class VoiceInputWidget(QtWidgets.QWidget):
     def _build_ui(self):
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0); root.setSpacing(8)
+
+        card = QtWidgets.QFrame(); card.setProperty("modernCard", True)
+        v = QtWidgets.QVBoxLayout(card); v.setContentsMargins(12, 12, 12, 12); v.setSpacing(8)
 
         row = QtWidgets.QHBoxLayout(); row.setSpacing(8)
         self.lbl = QtWidgets.QLabel()
@@ -305,8 +171,8 @@ class VoiceInputWidget(QtWidgets.QWidget):
         self.combo.currentIndexChanged.connect(self._on_lang_change)
 
         self.chk_translate = QtWidgets.QCheckBox()
-        self.chk_translate.setToolTip("Whisper can translate Arabic → English when enabled.")
         self.chk_translate.stateChanged.connect(self._refresh_labels)
+        self.chk_translate.setToolTip("Whisper can translate Arabic → English when enabled.")
 
         for w in (self.combo, self.chk_translate):
             w.setProperty("variant", "ghost"); w.setProperty("accent", "slate")
@@ -315,14 +181,16 @@ class VoiceInputWidget(QtWidgets.QWidget):
         row.addWidget(self.lbl)
         row.addWidget(self.combo, 1)
         row.addWidget(self.chk_translate)
-        root.addLayout(row)
+        v.addLayout(row)
 
         self.btn = QtWidgets.QPushButton()
         self.btn.setMinimumHeight(44)
         self.btn.setProperty("variant", "info"); self.btn.setProperty("accent", "sky")
         self.btn.clicked.connect(self._start)
         _polish(self.btn)
-        root.addWidget(self.btn)
+
+        v.addWidget(self.btn)
+        root.addWidget(card)
 
     def _on_lang_change(self):
         self.choice = self.combo.currentData() or "auto"
@@ -335,48 +203,13 @@ class VoiceInputWidget(QtWidgets.QWidget):
         c = {"auto": _tr(self, "Auto"), "ar": "ar", "en": "en"}[self.choice]
         extra = _tr(self, " · translate") if (engine == "Whisper" and self.chk_translate.isChecked()) else ""
         self.btn.setText(f"{_tr(self,'Voice Input')} ({c}) · {engine}{extra}")
-=======
-    def setup_ui(self):
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-
-        # Card wrapper
-        card = QtWidgets.QFrame()
-        card.setProperty("modernCard", True)
-        card_ly = QtWidgets.QVBoxLayout(card)
-        card_ly.setContentsMargins(12, 12, 12, 12)
-        card_ly.setSpacing(10)
-
-        self.voice_button = QtWidgets.QPushButton()
-        self.voice_button.setText(self.tr(f"Voice Input ({self.language})"))
-        self.voice_button.setProperty("variant", "info")  # blue tone
-        self.voice_button.setProperty("accent", "sky")
-        self.voice_button.setMinimumHeight(44)
-        self.voice_button.clicked.connect(self.start_voice_input)
-
-        card_ly.addWidget(self.voice_button)
-        layout.addWidget(card)
-
-        _polish(self.voice_button)
->>>>>>> 650dc2b (design edit)
 
     def retranslateUi(self):
         self._refresh_labels()
 
-<<<<<<< HEAD
     def _start(self):
         self.btn.setDown(True); QtCore.QTimer.singleShot(150, lambda: self.btn.setDown(False))
         self.btn.setText(_tr(self, "Listening…")); QtWidgets.QApplication.processEvents()
-=======
-    def start_voice_input(self):
-        # Show pressed state briefly (uses ModernTheme :pressed)
-        self.voice_button.setDown(True)
-        QtCore.QTimer.singleShot(180, lambda: self.voice_button.setDown(False))
-
-        self.voice_button.setText(self.tr("Listening... ({0})").format(self.language))
-        QtWidgets.QApplication.processEvents()
->>>>>>> 650dc2b (design edit)
         r = sr.Recognizer()
         try:
             with sr.Microphone() as source:
@@ -400,6 +233,7 @@ class VoiceInputWidget(QtWidgets.QWidget):
             self._t = t; t.start()
             return
 
+        # Google fallback
         self.btn.setText(_tr(self, "Transcribing… (Google)")); QtWidgets.QApplication.processEvents()
         try:
             if g_lang is None:
@@ -425,7 +259,7 @@ class VoiceInputWidget(QtWidgets.QWidget):
         if not cands:
             raise sr.RequestError("Google ASR returned no candidates")
         def ar_ratio(s: str): return len(_AR_CHARS.findall(s))/max(1,len(s))
-        best = max(cands, key=lambda kv: (ar_ratio(kv[1]) if kv[0].startswith("ar") else 0.0, len(kv[1])) )
+        best = max(cands, key=lambda kv: (ar_ratio(kv[1]) if kv[0].startswith("ar") else 0.0, len(kv[1])))
         return best[1]
 
     def _ok(self, text: str):
@@ -433,20 +267,91 @@ class VoiceInputWidget(QtWidgets.QWidget):
         self._refresh_labels()
 
     def _err(self, msg: str):
-        QtWidgets.QMessageBox.warning(
-            self, _tr(self,"Voice Input Error"),
-            msg + "\n" + _tr(self,"If Whisper is unavailable, the tool will fall back to Google when possible.")
-        )
+        QtWidgets.QMessageBox.warning(self, _tr(self,"Voice Input Error"), msg)
         self._refresh_labels()
 
-# ====================== Report helpers ======================
+# ---------- Parsing helpers (simple but practical) ----------
+_DATE_RX = re.compile(r'(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})')
+_TIME_RX = re.compile(r'(\d{1,2}:\d{2}\s*[APMapm]{2}|\d{1,2}:\d{2})')
+
+def _norm_date(s: str) -> str:
+    for fmt in ("%d-%m-%Y","%d/%m/%Y","%d-%m-%y","%d/%m/%y"):
+        try:
+            return datetime.strptime(s.strip(), fmt).strftime("%d-%m-%Y")
+        except Exception:
+            pass
+    return QtCore.QDate.currentDate().toString("dd-MM-yyyy")
+
+def _norm_time(s: str) -> str:
+    for fmt in ("%I:%M %p","%I:%M%p","%H:%M"):
+        try:
+            dt = datetime.strptime(s.strip(), fmt)
+            return dt.strftime("%I:%M %p").lstrip("0")
+        except Exception:
+            pass
+    return "12:00 PM"
+
+def parse_patient_info(text: str) -> Dict:
+    text = (text or "").strip()
+    name = "Unknown"
+    # naive name hints
+    m_name = re.search(r'(?:Patient|Name)\s*[:\-]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', text)
+    if m_name: name = m_name.group(1)
+    m_age = re.search(r'\b(?:age|aged)\s*[:\-]?\s*(\d{1,3})\b', text, re.I)
+    age = int(m_age.group(1)) if m_age else ""
+
+    # symptoms list (split commas after "complains of"/"symptoms")
+    symptoms = []
+    m_sym = re.search(r'(?:complains of|symptoms?[:\-]?)\s+([^\.\n]+)', text, re.I)
+    if m_sym:
+        symptoms = [s.strip() for s in re.split(r'[,\u060C]+', m_sym.group(1)) if s.strip()]
+
+    # appointment date/time if present
+    appt_date = "Not Specified"
+    appt_time = "Not Specified"
+    m_d = _DATE_RX.search(text); m_t = _TIME_RX.search(text)
+    if m_d: appt_date = _norm_date(m_d.group(1))
+    if m_t: appt_time = _norm_time(m_t.group(1))
+    # hints like "today", "tomorrow"
+    if "today" in text.lower() and appt_date == "Not Specified":
+        appt_date = QtCore.QDate.currentDate().toString("dd-MM-yyyy")
+    if "tomorrow" in text.lower() and appt_date == "Not Specified":
+        appt_date = QtCore.QDate.currentDate().addDays(1).toString("dd-MM-yyyy")
+
+    summary = ""
+    m_sum = re.search(r'(?:summary)[:\-]\s*(.+)', text, re.I)
+    if m_sum: summary = m_sum.group(1).strip()
+    if not summary:
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        summary = " ".join(sentences[:2]).strip() if sentences else ""
+
+    follow_up = ""
+    m_fu = re.search(r'(?:follow[- ]?up)[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|today|tomorrow)', text, re.I)
+    if m_fu:
+        v = m_fu.group(1).lower()
+        if v in ("today","tomorrow"):
+            days = 0 if v=="today" else 1
+            follow_up = QtCore.QDate.currentDate().addDays(days).toString("dd-MM-yyyy")
+        else:
+            follow_up = _norm_date(v)
+
+    return {
+        "Name": name,
+        "Age": age,
+        "Symptoms": symptoms,
+        "Notes": "",
+        "Date": QtCore.QDate.currentDate().toString("dd-MM-yyyy"),
+        "Appointment Date": appt_date,
+        "Appointment Time": appt_time,
+        "Summary": summary or "—",
+        "Follow-Up Date": follow_up or "Not Specified",
+    }
+
+# ---------- Report helpers ----------
 def generate_pdf_report(data: Dict, file_path: str):
-    if not REPORTLAB_OK:
-        raise RuntimeError('ReportLab is not installed. Install `reportlab` to enable PDF export.')
     doc = SimpleDocTemplate(file_path, pagesize=letter)
     styles = getSampleStyleSheet()
     elements = []
-<<<<<<< HEAD
     nm = data.get("Name","Unknown")
     elements.append(Paragraph(f"Patient Report: {nm}", styles["Title"]))
     elements.append(Spacer(1, 12))
@@ -456,21 +361,6 @@ def generate_pdf_report(data: Dict, file_path: str):
 
     header = [Paragraph("<b>Field</b>", styles["BodyText"]), Paragraph("<b>Value</b>", styles["BodyText"])]
     rows = [header]
-=======
-    client_name = data.get("Name", "Unknown")
-
-    title = Paragraph(f"Patient Report: {client_name}", styles["Title"])
-    elements.append(title)
-    elements.append(Spacer(1, 12))
-
-    summary = data.get("Summary", "No summary available.")
-    summary_paragraph = Paragraph(f"<b>Summary:</b><br/>{summary}", styles["BodyText"])
-    elements.append(summary_paragraph)
-    elements.append(Spacer(1, 12))
-
-    header_data = [Paragraph("<b>Field</b>", styles["BodyText"]), Paragraph("<b>Value</b>", styles["BodyText"])]
-    details = [header_data]
->>>>>>> 650dc2b (design edit)
     fields = [
         ("Age", data.get("Age","N/A")),
         ("Symptoms", ", ".join(data.get("Symptoms",[]))),
@@ -480,7 +370,6 @@ def generate_pdf_report(data: Dict, file_path: str):
         ("Appointment Time", data.get("Appointment Time","Not Specified")),
         ("Follow-Up Date", data.get("Follow-Up Date","Not Specified")),
     ]
-<<<<<<< HEAD
     for k,v in fields:
         rows.append([Paragraph(k, styles["BodyText"]), Paragraph(str(v), styles["BodyText"])])
 
@@ -493,26 +382,13 @@ def generate_pdf_report(data: Dict, file_path: str):
         ('BOTTOMPADDING', (0,0), (-1,0), 12),
         ('BACKGROUND', (0,1), (-1,-1), colors.HexColor('#f3f4f6')),
         ('GRID',       (0,0), (-1,-1), 0.5, colors.HexColor('#e5e7eb')),
-=======
-    for field, value in fields:
-        details.append([Paragraph(field, styles["BodyText"]), Paragraph(str(value), styles["BodyText"])])
-
-    table = Table(details, colWidths=[150, 350])
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),  # indigo header to match theme
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f3f4f6')),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e5e7eb')),
->>>>>>> 650dc2b (design edit)
     ]))
     elements.append(table)
     doc.build(elements)
 
-# ====================== Minimal Agent & actions ======================
+# ---------- Minimal Agent Engine (self-contained) ----------
 class Agent(QtCore.QObject):
+    # granular signals for the viewer; viewer will show them at 0.7s cadence
     log = QtCore.pyqtSignal(str)
     step_started = QtCore.pyqtSignal(str)
     step_line = QtCore.pyqtSignal(str)
@@ -542,11 +418,7 @@ class Agent(QtCore.QObject):
         self.log.emit("Agent: plan complete")
         return ctx
 
-def _reports_dir() -> str:
-    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-    path = os.path.join(desktop, "reports"); os.makedirs(path, exist_ok=True)
-    return path
-
+# ---------- Built-in actions ----------
 def action_insert_db(ctx: Dict) -> Tuple[Dict, List[str]]:
     lines = ["Writing patient to database…"]
     try:
@@ -560,11 +432,10 @@ def action_insert_db(ctx: Dict) -> Tuple[Dict, List[str]]:
 def action_followup_rule(ctx: Dict) -> Tuple[Dict, List[str]]:
     d = dict(ctx.get("data", {}))
     lines = ["Applying follow-up rule…"]
-    fu = (d.get("Follow-Up Date") or "").strip()
-    if not fu or fu == "Not Specified":
-        base_str = _safe_dt_parse(d.get("Date"))
-        base = datetime.strptime(base_str, "%d-%m-%Y")
-        d["Follow-Up Date"] = (base + timedelta(days=7)).strftime("%d-%m-%Y")
+    if not d.get("Follow-Up Date") or d.get("Follow-Up Date") == "Not Specified":
+        base = datetime.strptime(d.get("Date"), "%d-%m-%Y")
+        fut = base + timedelta(days=7)
+        d["Follow-Up Date"] = fut.strftime("%d-%m-%Y")
         lines.append(f"Set follow-up to {d['Follow-Up Date']}.")
     else:
         lines.append("Follow-up already present.")
@@ -576,10 +447,18 @@ def action_tag_status(ctx: Dict) -> Tuple[Dict, List[str]]:
     lines = ["Tagging appointment status…"]
     apd = d.get("Appointment Date","Not Specified")
     apt = d.get("Appointment Time","Not Specified")
-    d["Appointment Status"] = "Scheduled" if (apd != "Not Specified" and apt != "Not Specified") else "Missing"
+    if apd != "Not Specified" and apt != "Not Specified":
+        d["Appointment Status"] = "Scheduled"
+    else:
+        d["Appointment Status"] = "Missing"
     lines.append(f"Status: {d['Appointment Status']}")
     ctx["data"] = d
     return ctx, lines
+
+def _reports_dir() -> str:
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    path = os.path.join(desktop, "reports"); os.makedirs(path, exist_ok=True)
+    return path
 
 def action_generate_pdf(ctx: Dict) -> Tuple[Dict, List[str]]:
     d = dict(ctx.get("data", {}))
@@ -610,7 +489,7 @@ def action_write_json(ctx: Dict) -> Tuple[Dict, List[str]]:
         lines.append(f"❌ JSON failed: {e}")
     return ctx, lines
 
-# ====================== Agent Simulator Dialog ======================
+# ---------- Agent Simulator Dialog ----------
 class AgentSimDialog(QtWidgets.QDialog):
     def __init__(self, agent: Agent, steps: List[str], ctx: Dict, parent=None):
         super().__init__(parent)
@@ -621,6 +500,7 @@ class AgentSimDialog(QtWidgets.QDialog):
         self.resize(780, 560)
 
         v = QtWidgets.QVBoxLayout(self)
+        # Taskbar
         head = QtWidgets.QHBoxLayout()
         self.title = QtWidgets.QLabel("Autoflow: Visit → Report → Archive")
         self.title.setStyleSheet("font-size:18px; font-weight:700;")
@@ -630,10 +510,12 @@ class AgentSimDialog(QtWidgets.QDialog):
         head.addWidget(self.btn_run); head.addWidget(self.btn_close)
         v.addLayout(head)
 
+        # Log view
         self.log = QtWidgets.QTextEdit(readOnly=True)
         self.log.setStyleSheet("font-family: Consolas, Menlo, monospace;")
         v.addWidget(self.log, 1)
 
+        # Footer row for file buttons (hidden until available)
         self.files_row = QtWidgets.QHBoxLayout()
         self.files_row.addStretch(1)
         v.addLayout(self.files_row)
@@ -641,12 +523,14 @@ class AgentSimDialog(QtWidgets.QDialog):
         self.btn_close.clicked.connect(self.reject)
         self.btn_run.clicked.connect(self._run)
 
+        # Connect agent signals to buffer (throttled display)
         self._queue: List[str] = []
         self.agent.log.connect(self._enqueue)
         self.agent.step_started.connect(lambda n: self._enqueue(f"\n▶️  {n}"))
         self.agent.step_line.connect(lambda s: self._enqueue(f"   {s}"))
         self.agent.step_finished.connect(lambda n, r: self._enqueue(f"✅ done: {n}"))
 
+        # Throttler timer (0.7s per line)
         self._timer = QtCore.QTimer(self); self._timer.setInterval(700)
         self._timer.timeout.connect(self._drain)
         self._timer.start()
@@ -699,7 +583,7 @@ class _AgentWorker(QtCore.QThread):
         except Exception as e:
             self.failed.emit(str(e))
 
-# ====================== Main Extraction Tab ======================
+# ---------- Main Extraction Tab ----------
 class ExtractionTab(QtWidgets.QWidget):
     dataProcessed = QtCore.pyqtSignal(dict)
     appointmentProcessed = QtCore.pyqtSignal(dict)
@@ -707,74 +591,71 @@ class ExtractionTab(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._settings = QtCore.QSettings("YourOrg", "MedicalDocAI Demo v1.9.3")
         self._setup_ui()
         self._build_agent()
-        self._restore_state()
 
-<<<<<<< HEAD
     def tr(self, text): return _tr(self, text)
 
-    # ---------- UI ----------
+    # UI
     def _setup_ui(self):
         root = QtWidgets.QVBoxLayout(self); root.setContentsMargins(16,16,16,16); root.setSpacing(12)
 
         # Header
         header = QtWidgets.QFrame(); header.setProperty("modernCard", True)
         h = QtWidgets.QHBoxLayout(header); h.setContentsMargins(12,12,12,12); h.setSpacing(8)
-        title = QtWidgets.QLabel(self.tr("Clinical Extraction"))
-        title.setStyleSheet("font: 700 18pt 'Segoe UI';")
-        subtitle = QtWidgets.QLabel(self.tr("Dictate or paste—AI structures the visit, schedules follow-up, and generates a report."))
-        subtitle.setStyleSheet(f"color:{DS_COLORS['muted']};")
-        left = QtWidgets.QVBoxLayout(); left.addWidget(title); left.addWidget(subtitle)
-        h.addLayout(left); h.addStretch(1)
+        self.h_title = QtWidgets.QLabel(self.tr("Data Extraction")); self.h_title.setStyleSheet("font-size:16pt; font-weight:700;")
+        self.btn_pause_voice = QtWidgets.QPushButton(self.tr("Pause Voice"))
+        # self.btn_pause_voice.setProperty("variant","ghost");
+        self.btn_pause_voice.setProperty("accent","amber")
+        self.btn_pause_voice.clicked.connect(self._toggle_voice)
+        _polish(self.btn_pause_voice)
+        h.addWidget(self.h_title); h.addStretch(1); h.addWidget(self.btn_pause_voice)
         root.addWidget(header)
 
-        # Split: Left (Input + Voice), Right (Preview)
-        split = QtWidgets.QSplitter(QtCore.Qt.Horizontal); split.setChildrenCollapsible(False)
-        root.addWidget(split, 1)
+        # Input card
+        card = QtWidgets.QFrame(); card.setProperty("modernCard", True)
+        c = QtWidgets.QVBoxLayout(card); c.setContentsMargins(12,12,12,12); c.setSpacing(12)
 
-        # ----- LEFT: Input -----
-        left_card = QtWidgets.QFrame(); left_card.setProperty("modernCard", True)
-        lc = QtWidgets.QVBoxLayout(left_card); lc.setContentsMargins(12,12,12,12); lc.setSpacing(8)
+        c.addWidget(QtWidgets.QLabel(self.tr("Enter patient information and AI will analyze it:")))
+        row = QtWidgets.QHBoxLayout(); row.setSpacing(12)
+        self.txt = QtWidgets.QTextEdit(); self.txt.setMinimumHeight(140); row.addWidget(self.txt, 1)
 
-        lbl = QtWidgets.QLabel(self.tr("Patient narrative (Arabic/English)."))
-        lbl.setStyleSheet(f"color:{DS_COLORS['textDim']};")
-        self.txt = QtWidgets.QTextEdit(); self.txt.setMinimumHeight(180)
-        self.txt.setPlaceholderText(self.tr("Example: Patient Jane Smith, age 23, complains of cough and headache. Appointment 21-11-2025 at 10:30 AM. Follow-up 28-11-2025. Summary: ..."))
-        lc.addWidget(lbl); lc.addWidget(self.txt, 1)
-
-        # Voice strip (no pause)
-        voice_strip = QtWidgets.QFrame()
-        vs = QtWidgets.QHBoxLayout(voice_strip); vs.setContentsMargins(0,0,0,0); vs.setSpacing(8)
         self.voice = VoiceInputWidget(language="ar-SA", use_whisper=True, whisper_model_size="base")
         self.voice.textReady.connect(lambda s: self.txt.setPlainText(s))
-        vs.addWidget(self.voice, 1)
-        lc.addWidget(voice_strip)
+        row.addWidget(self.voice, 0)
+        c.addLayout(row)
 
-        # Actions row
         actions = QtWidgets.QHBoxLayout(); actions.setSpacing(8)
-        self.btn_process = QtWidgets.QPushButton(self.tr("Process (Ctrl+Enter)"))
-        self.btn_process.setProperty("variant","success"); _polish(self.btn_process)
-        self.btn_process.clicked.connect(self._delayed_process)
+        self.btn_load = QtWidgets.QPushButton(self.tr("Load Test Data"))
+        # self.btn_load.setProperty("variant", "ghost")
+        self.btn_load.setProperty("accent", "amber")
+        self.btn_load.setStyleSheet(
+            "QPushButton {"
+            "  color: #f59e0b;"
+            "  border: 1px solid #f59e0b;"
+            "  background: transparent;"
+            "}"
+            "QPushButton:hover { background: rgba(245,158,11,0.08); }"
+            "QPushButton:pressed { background: rgba(245,158,11,0.14); }"
+            "QPushButton:disabled { color: #fbbf24; border-color: #fbbf24; }"
+        )
+        _polish(self.btn_load)
 
-        self.btn_load = QtWidgets.QPushButton(self.tr("Load Sample (Ctrl+L)"))
-        self.btn_load.setProperty("variant","ghost"); _polish(self.btn_load)
+        # ensure visible (no hover needed)
+        self.btn_load.setStyleSheet("color:#f59e0b; border:1px solid #f59e0b;")
         self.btn_load.clicked.connect(self._load_test)
 
-        self.btn_agent = QtWidgets.QPushButton(self.tr("Agent (F1)"))
-        self.btn_agent.setProperty("variant","ghost"); _polish(self.btn_agent)
-        self.btn_agent.clicked.connect(self._open_agent)
+        self.btn_process = QtWidgets.QPushButton(self.tr("Process Input"))
+        self.btn_process.setProperty("accent","violet"); _polish(self.btn_process)
+        self.btn_process.clicked.connect(self._delayed_process)
 
-        actions.addWidget(self.btn_process); actions.addStretch(1); actions.addWidget(self.btn_load); actions.addWidget(self.btn_agent)
-        lc.addLayout(actions)
+        actions.addWidget(self.btn_load); actions.addStretch(1); actions.addWidget(self.btn_process)
+        c.addLayout(actions)
+        root.addWidget(card)
 
-        split.addWidget(left_card)
-
-        # ----- RIGHT: Preview -----
-        right_card = QtWidgets.QFrame(); right_card.setProperty("modernCard", True)
-        rc = QtWidgets.QVBoxLayout(right_card); rc.setContentsMargins(12,12,12,12); rc.setSpacing(8)
-
+        # Table
+        tcard = QtWidgets.QFrame(); tcard.setProperty("modernCard", True)
+        tl = QtWidgets.QVBoxLayout(tcard); tl.setContentsMargins(12,12,12,12); tl.setSpacing(8)
         self.table = QtWidgets.QTableWidget(0,2)
         self.table.setHorizontalHeaderLabels([self.tr("Field"), self.tr("Value")])
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -782,116 +663,40 @@ class ExtractionTab(QtWidgets.QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QtWidgets.QTableWidget.SelectRows)
         self.table.setEditTriggers(QtWidgets.QTableWidget.NoEditTriggers)
-        rc.addWidget(self.table, 1)
+        tl.addWidget(self.table)
+        root.addWidget(tcard)
 
-        # Export row
-        export = QtWidgets.QHBoxLayout(); export.setSpacing(8)
-        self.btn_report = QtWidgets.QPushButton(self.tr("Create Report (PDF+JSON)"))
-        self.btn_report.setProperty("variant","info"); _polish(self.btn_report)
+        # Save row
+        save = QtWidgets.QFrame(); save.setProperty("modernCard", True)
+        sl = QtWidgets.QHBoxLayout(save); sl.setContentsMargins(12,12,12,12); sl.setSpacing(8)
+        self.btn_report = QtWidgets.QPushButton(self.tr("Create Report")); self.btn_report.setProperty("variant","success")
+        self.btn_excel  = QtWidgets.QPushButton(self.tr("Append Name to Clients File")); self.btn_excel.setProperty("variant","info")
+        self.btn_aaa    = QtWidgets.QPushButton(self.tr("Start AAA")); self.btn_aaa.setProperty("variant","warning")
+        for b in (self.btn_report, self.btn_excel, self.btn_aaa): _polish(b)
         self.btn_report.clicked.connect(self._save_report)
-
-        self.btn_excel  = QtWidgets.QPushButton(self.tr("Append Name to Excel"))
-        self.btn_excel.setProperty("variant","ghost"); _polish(self.btn_excel)
         self.btn_excel.clicked.connect(self._append_excel)
+        self.btn_aaa.clicked.connect(self._aaa)
+        sl.addWidget(self.btn_report); sl.addWidget(self.btn_excel); sl.addStretch(1); sl.addWidget(self.btn_aaa)
+        root.addWidget(save)
 
-        export.addWidget(self.btn_report); export.addStretch(1); export.addWidget(self.btn_excel)
-        rc.addLayout(export)
-
-        split.addWidget(right_card)
-        split.setStretchFactor(0, 1)
-        split.setStretchFactor(1, 1)
-
-        # Status bar
+        # Status + Agent button
         status = QtWidgets.QFrame(); status.setProperty("modernCard", True)
         st = QtWidgets.QHBoxLayout(status); st.setContentsMargins(12,10,12,10); st.setSpacing(8)
         self.lbl_status = QtWidgets.QLabel(self.tr("Status: Ready")); self.lbl_status.setStyleSheet("font-weight:600;")
         st.addWidget(self.lbl_status)
         root.addWidget(status)
 
-        # Shortcuts
-        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+Return"), self, activated=self._delayed_process)
-        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+Enter"), self, activated=self._delayed_process)
-        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+L"), self, activated=self._load_test)
-        QtWidgets.QShortcut(QtGui.QKeySequence("F1"), self, activated=self._open_agent)
+        self.btn_agent = QtWidgets.QPushButton(self.tr("Agent (simulate/run)"))
+        self.btn_agent.clicked.connect(self._open_agent)
+        root.addWidget(self.btn_agent)
 
-        # Timers (kept)
+        root.addStretch(1)
+
+        # staged AAA timers
         self._t1 = QtCore.QTimer(self); self._t1.setSingleShot(True); self._t1.timeout.connect(self._save_report)
         self._t2 = QtCore.QTimer(self); self._t2.setSingleShot(True); self._t2.timeout.connect(self._append_excel)
 
-        # Apply glass theme for this tab
-        self.setStyleSheet(self._tab_qss())
-
-    # Glassy QSS for this tab
-    def _tab_qss(self) -> str:
-        p = DS_COLORS
-        return f"""
-        QWidget {{ color:{p['text']}; font-family:'Segoe UI', Arial; font-size:14px; }}
-
-        /* Cards */
-        QFrame[modernCard="true"] {{
-            background:{p['panel']};
-            border:1px solid rgba(255,255,255,0.45);
-            border-radius:12px;
-        }}
-
-        /* Inputs */
-        QLineEdit, QComboBox, QTextEdit {{
-            background:{p['inputBg']};
-            color:#0f172a;
-            border:1px solid #D6E4F5;
-            border-radius:8px;
-            padding:6px 10px;
-            selection-background-color:{p['selBg']};
-            selection-color:{p['selFg']};
-        }}
-        QLineEdit:focus, QComboBox:focus, QTextEdit:focus {{
-            border:1px solid {p['primary']};
-            box-shadow:0 0 0 2px rgba(58,141,255,0.18);
-        }}
-
-        /* Buttons */
-        QPushButton {{
-            border-radius:10px; padding:9px 14px; font-weight:600;
-            border:1px solid transparent; background:{p['primary']}; color:white;
-        }}
-        QPushButton:hover {{ filter:brightness(1.05); }}
-        QPushButton:pressed {{ filter:brightness(0.95); }}
-
-        QPushButton[variant="ghost"] {{
-            background: rgba(255,255,255,0.85); color:#0F172A; border:1px solid #D6E4F5;
-        }}
-        QPushButton[variant="ghost"]:hover {{ background: rgba(255,255,255,0.95); }}
-        QPushButton[variant="success"] {{ background:{p['success']}; color:white; }}
-        QPushButton[variant="info"]    {{ background:{p['info']};    color:white; }}
-
-        /* Tables */
-        QHeaderView::section {{
-            background: rgba(255,255,255,0.85);
-            color:#334155;
-            padding:8px 10px;
-            border:0; border-bottom:1px solid {p['stroke']};
-            font-weight:600;
-        }}
-        QTableWidget, QTableView {{
-            background:{p['panelInner']};
-            color:#0f172a;
-            border:1px solid {p['stroke']};
-            border-radius:10px;
-            gridline-color:#E8EEF7;
-            selection-background-color:{p['selBg']};
-            selection-color:{p['selFg']};
-        }}
-        QTableView::item:!selected:alternate {{ background:{p['stripe']}; }}
-
-        /* Scrollbars */
-        QScrollBar:vertical {{ background:transparent; width:10px; margin:4px; }}
-        QScrollBar::handle:vertical {{ background:rgba(58,141,255,0.55); min-height:28px; border-radius:6px; }}
-        QScrollBar:horizontal {{ background:transparent; height:10px; margin:4px; }}
-        QScrollBar::handle:horizontal {{ background:rgba(58,141,255,0.55); min-width:28px; border-radius:6px; }}
-        QScrollBar::add-line, QScrollBar::sub-line {{ width:0; height:0; }}
-        """
-
-    # ---------- Agent ----------
+    # Agent
     def _build_agent(self):
         self.agent = Agent(self)
         self.agent.register("insert_db", action_insert_db)
@@ -899,294 +704,71 @@ class ExtractionTab(QtWidgets.QWidget):
         self.agent.register("tag_status", action_tag_status)
         self.agent.register("generate_pdf", action_generate_pdf)
         self.agent.register("write_json", action_write_json)
+
+        # reflect agent log into status strip
         self.agent.log.connect(lambda s: self.lbl_status.setText(s))
 
-    # ---------- Persistence ----------
-    def _restore_state(self):
-=======
-        # Timers (single-shot) wired once
-        self.aaa_timer1 = QtCore.QTimer(self)
-        self.aaa_timer1.setSingleShot(True)
-        self.aaa_timer1.timeout.connect(self._aaa_save_step)
+    # Signal: dataProcessed / appointmentProcessed / switchToAppointments
+    dataProcessed = QtCore.pyqtSignal(dict)
+    appointmentProcessed = QtCore.pyqtSignal(dict)
+    switchToAppointments = QtCore.pyqtSignal(str)
 
-        self.aaa_timer2 = QtCore.QTimer(self)
-        self.aaa_timer2.setSingleShot(True)
-        self.aaa_timer2.timeout.connect(self._aaa_excel_step)
-
-    def setup_ui(self):
-        root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(12)
-
-        # ===== Header card =====
-        header_card = QtWidgets.QFrame()
-        header_card.setProperty("modernCard", True)
-        hly = QtWidgets.QHBoxLayout(header_card)
-        hly.setContentsMargins(12, 12, 12, 12)
-        hly.setSpacing(8)
-
-        self.header_label = QtWidgets.QLabel(self.tr("Data Extraction"))
-        self.header_label.setStyleSheet("font-size: 16pt; font-weight: 700;")
-        self.header_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-
-        hly.addWidget(self.header_label)
-        hly.addStretch(1)
-
-        self.pause_voice_btn = QtWidgets.QPushButton(self.tr("Pause Voice"))
-        self.pause_voice_btn.setProperty("variant", "ghost")
-        self.pause_voice_btn.setProperty("accent", "amber")
-        self.pause_voice_btn.clicked.connect(self.toggle_voice_input)
-        hly.addWidget(self.pause_voice_btn)
-        _polish(self.pause_voice_btn)
-
-        root.addWidget(header_card)
-
-        # ===== Input card (prompt + text + voice + process buttons) =====
-        input_card = QtWidgets.QFrame()
-        input_card.setProperty("modernCard", True)
-        ily = QtWidgets.QVBoxLayout(input_card)
-        ily.setContentsMargins(12, 12, 12, 12)
-        ily.setSpacing(12)
-
-        self.prompt_label = QtWidgets.QLabel(self.tr("Enter patient information and AI will analyze it:"))
-        ily.addWidget(self.prompt_label)
-
-        row = QtWidgets.QHBoxLayout()
-        row.setSpacing(12)
-
-        self.input_text = QtWidgets.QTextEdit()
-        self.input_text.setMinimumHeight(140)
-        row.addWidget(self.input_text, 1)
-
-        self.voice_widget_ar = VoiceInputWidget(language="ar-SA")
-        self.voice_widget_ar.textReady.connect(lambda text: self.input_text.setPlainText(text))
-        row.addWidget(self.voice_widget_ar, 0)
-
-        ily.addLayout(row)
-
-        # action buttons (left: load test as ghost/amber, right: process primary)
-        actions = QtWidgets.QHBoxLayout()
-        actions.setSpacing(8)
-
-        self.load_test_button = QtWidgets.QPushButton(self.tr("Load Test Data"))
-        self.load_test_button.setProperty("variant", "ghost")
-        self.load_test_button.setProperty("gold", "amber")
-        self.load_test_button.clicked.connect(self.load_test_data)
-        _polish(self.load_test_button)
-        # hard-pin visible text (beats any inherited color)
-        self.load_test_button.setStyleSheet("""
-            color: #f59e0b;
-            border: 1px solid #f59e0b;
-        """)
-
-        # <-- make text visible immediately (no hover needed)
-
-        self.process_button = QtWidgets.QPushButton(self.tr("Process Input"))
-        # default primary (indigo); give a violet accent to stand out
-        self.process_button.setProperty("accent", "violet")
-        self.process_button.clicked.connect(self.delayed_process_input)
-
-        actions.addWidget(self.load_test_button)
-        actions.addStretch(1)
-        actions.addWidget(self.process_button)
-        ily.addLayout(actions)
-        _polish(self.load_test_button, self.process_button)
-
-        root.addWidget(input_card)
-
-        # ===== Table card =====
-        table_card = QtWidgets.QFrame()
-        table_card.setProperty("modernCard", True)
-        tly = QtWidgets.QVBoxLayout(table_card)
-        tly.setContentsMargins(12, 12, 12, 12)
-        tly.setSpacing(8)
-
-        self.tableWidget = QtWidgets.QTableWidget()
-        self.tableWidget.setColumnCount(2)
-        self.tableWidget.setHorizontalHeaderLabels([self.tr("Field"), self.tr("Value")])
-        self.tableWidget.horizontalHeader().setStretchLastSection(True)
-        self.tableWidget.verticalHeader().setVisible(False)
-        self.tableWidget.setAlternatingRowColors(True)
-        self.tableWidget.setSelectionBehavior(QtWidgets.QTableWidget.SelectRows)
-        self.tableWidget.setEditTriggers(QtWidgets.QTableWidget.NoEditTriggers)
-        tly.addWidget(self.tableWidget)
-
-        root.addWidget(table_card)
-
-        # ===== Save/automation card =====
-        save_card = QtWidgets.QFrame()
-        save_card.setProperty("modernCard", True)
-        sly = QtWidgets.QHBoxLayout(save_card)
-        sly.setContentsMargins(12, 12, 12, 12)
-        sly.setSpacing(8)
-
-        self.save_pdf_json_button = QtWidgets.QPushButton(self.tr("Create Report"))
-        self.save_pdf_json_button.setProperty("variant", "success")  # green
-        self.save_pdf_json_button.clicked.connect(self.save_data)
-
-        self.append_excel_button = QtWidgets.QPushButton(self.tr("Append Name to Clients File"))
-        self.append_excel_button.setProperty("variant", "info")      # blue
-        self.append_excel_button.clicked.connect(self.append_client_name_to_excel)
-
-        self.start_aaa_btn = QtWidgets.QPushButton(self.tr("Start AAA"))
-        self.start_aaa_btn.setProperty("variant", "warning")         # amber
-        self.start_aaa_btn.clicked.connect(self.automate_aaa)
-
-        sly.addWidget(self.save_pdf_json_button)
-        sly.addWidget(self.append_excel_button)
-        sly.addStretch(1)
-        sly.addWidget(self.start_aaa_btn)
-        _polish(self.save_pdf_json_button, self.append_excel_button, self.start_aaa_btn)
-
-        root.addWidget(save_card)
-
-        # ===== Status strip (card) =====
-        status_card = QtWidgets.QFrame()
-        status_card.setProperty("modernCard", True)
-        scly = QtWidgets.QHBoxLayout(status_card)
-        scly.setContentsMargins(12, 10, 12, 10)
-        scly.setSpacing(8)
-        self.status_label = QtWidgets.QLabel(self.tr("Status: Ready"))
-        self.status_label.setStyleSheet("font-weight: 600;")
-        self.status_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        scly.addWidget(self.status_label)
-        root.addWidget(status_card)
-
-        root.addStretch(1)
-        self.retranslateUi()
-
-    def retranslateUi(self):
-        self.pause_voice_btn.setText(self.tr("Pause Voice"))
-        self.header_label.setText(self.tr("Data Extraction"))
-        self.prompt_label.setText(self.tr("Enter patient information and AI will analyze it:"))
-        self.load_test_button.setText(self.tr("Load Test Data"))
-        self.process_button.setText(self.tr("Process Input"))
-        self.tableWidget.setHorizontalHeaderLabels([self.tr("Field"), self.tr("Value")])
-        self.save_pdf_json_button.setText(self.tr("Create Report"))
-        self.append_excel_button.setText(self.tr("Append Name to Clients File"))
-        self.start_aaa_btn.setText(self.tr("Start AAA"))
-        self.status_label.setText(self.tr("Status: Ready"))
-        self.voice_widget_ar.retranslateUi()
-
-    # ----- Logic -----
-    def load_test_data(self):
-        test_data = (
-            "Patient Jane Smith, age 23, complains of cough and headache. "
-            "Her appointment is scheduled for today. "
-            "Her follow-up is scheduled for 22-11-2023. "
-            "She has a history of asthma. "
-            "Summary: Patient exhibits mild respiratory distress."
-        )
-        self.input_text.setPlainText(test_data)
-
-    def delayed_process_input(self):
-        self.status_label.setText(self.tr("Status: Processing input..."))
-        self.thinking_msg = QtWidgets.QMessageBox(self)
-        self.thinking_msg.setWindowTitle(self.tr("Processing"))
-        self.thinking_msg.setText(self.tr("Generating output... Please wait."))
-        self.thinking_msg.setStandardButtons(QtWidgets.QMessageBox.NoButton)
-        self.thinking_msg.show()
-        self.input_text.setDisabled(True)
-
-        # show pressed state on the process button
-        self.process_button.setDown(True)
-        QtCore.QTimer.singleShot(160, lambda: self.process_button.setDown(False))
-
-        # Give the UI a moment and then process
-        QtCore.QTimer.singleShot(400, self.process_input)
-
-    def process_input(self):
->>>>>>> 650dc2b (design edit)
-        try:
-            last_text = self._settings.value("extraction/last_text", "", type=str)
-            last_lang = self._settings.value("extraction/last_lang", "auto", type=str)
-            if last_text:
-                self.txt.setPlainText(last_text)
-            i = self.voice.combo.findData(last_lang)
-            if i >= 0:
-                self.voice.combo.setCurrentIndex(i)
-        except Exception:
-            pass
-
-    def _save_state(self):
-        try:
-            self._settings.setValue("extraction/last_text", self.txt.toPlainText())
-            self._settings.setValue("extraction/last_lang", self.voice.combo.currentData() or "auto")
-        except Exception:
-            pass
-
-    # ---------- Actions ----------
+    # Actions
     def _load_test(self):
         tx = ("Patient Jane Smith, age 23, complains of cough and headache. "
               "Appointment: 21-11-2025 at 10:30 AM. "
               "Follow-up: 28-11-2025. "
               "Summary: Patient exhibits mild respiratory distress.")
         self.txt.setPlainText(tx)
-        self.lbl_status.setText(self.tr("Status: Sample loaded."))
-
-    def _normalize_appointment(self, data: Dict) -> Dict:
-        d = dict(data or {})
-        d["Date"] = _safe_dt_parse(d.get("Date"))
-        ad = d.get("Appointment Date"); at = d.get("Appointment Time")
-        d["Appointment Date"] = _safe_dt_parse(ad) if ad and ad != "Not Specified" else _today_str()
-        d["Appointment Time"] = _norm_time(at) if at and at != "Not Specified" else "12:00 PM"
-        return d
 
     def _delayed_process(self):
         self.lbl_status.setText(self.tr("Status: Processing input…"))
-        self._save_state()
         self._thinking = QtWidgets.QMessageBox(self)
         self._thinking.setWindowTitle(self.tr("Processing"))
         self._thinking.setText(self.tr("Generating output… Please wait."))
         self._thinking.setStandardButtons(QtWidgets.QMessageBox.NoButton)
         self._thinking.show()
         self.txt.setDisabled(True)
-        self.btn_process.setDown(True); QtCore.QTimer.singleShot(150, lambda: self.btn_process.setDown(False))
-        QtCore.QTimer.singleShot(350, self._process)
+        self.btn_process.setDown(True); QtCore.QTimer.singleShot(160, lambda: self.btn_process.setDown(False))
+        QtCore.QTimer.singleShot(400, self._process)
+
+    def _normalize_appointment(self, data: Dict) -> Dict:
+        d = dict(data or {})
+        if not d.get("Appointment Date") or d["Appointment Date"] == "Not Specified":
+            d["Appointment Date"] = QtCore.QDate.currentDate().toString("dd-MM-yyyy")
+        if not d.get("Appointment Time") or d["Appointment Time"] == "Not Specified":
+            d["Appointment Time"] = "12:00 PM"
+        return d
 
     def _process(self):
         try:
             raw = self.txt.toPlainText().strip()
             if not raw:
-                QtWidgets.QMessageBox.warning(self, self.tr("Input Error"), self.tr("Please enter dictation or text."))
+                QtWidgets.QMessageBox.warning(self, self.tr("Input Error"), self.tr("Please enter some text."))
                 return
-
-<<<<<<< HEAD
             self.current_data = parse_patient_info(raw)
+            # Always emit a normalized appointment so the Appointments tab never shows "Not Specified"
             appt_payload = self._normalize_appointment(self.current_data)
-
             self._populate_table(self.current_data)
             self.dataProcessed.emit(dict(self.current_data))
             self.appointmentProcessed.emit(dict(appt_payload))
             self.switchToAppointments.emit(appt_payload.get("Name","Unknown"))
 
-=======
-            # Dummy parsing – replace with your actual parsing logic.
-            self.current_data = parse_patient_info(text)
-            self.populate_table(self.current_data)
-            self.dataProcessed.emit(self.current_data)
-
-            if self.current_data.get("Appointment Date", "Not Specified") != "Not Specified":
-                self.appointmentProcessed.emit(self.current_data)
-
-            # Persist
->>>>>>> 650dc2b (design edit)
+            # Try to persist to DB quietly
             try:
                 from data.data import insert_client
                 insert_client(self.current_data)
             except Exception:
                 pass
 
-<<<<<<< HEAD
             self.lbl_status.setText(self.tr("Status: Input processed successfully."))
-=======
-            self.status_label.setText(self.tr("Status: Input processed successfully."))
->>>>>>> 650dc2b (design edit)
+            # Let the user watch the agent work
+            QtCore.QTimer.singleShot(80, self._open_agent)
+
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, self.tr("Processing Error"), self.tr("An error occurred:\n") + str(e))
             self.lbl_status.setText(self.tr("Status: Error processing input."))
         finally:
-<<<<<<< HEAD
             self.txt.setDisabled(False)
             if hasattr(self, "_thinking"):
                 self._thinking.hide()
@@ -1194,44 +776,19 @@ class ExtractionTab(QtWidgets.QWidget):
     def _populate_table(self, data: Dict):
         self.table.setRowCount(0)
         fnt = QtGui.QFont("Segoe UI", 11)
-        order = [
-            "Name","Age","Symptoms","Summary","Notes",
-            "Date","Appointment Date","Appointment Time","Follow-Up Date"
-        ]
-        for key in order:
-            val = data.get(key, "")
-            if isinstance(val, list):
-                val = ", ".join(val)
-            row = self.table.rowCount()
+        for row, (k, v) in enumerate(data.items()):
             self.table.insertRow(row)
-            it1 = QtWidgets.QTableWidgetItem(key); it1.setFont(fnt)
-            it2 = QtWidgets.QTableWidgetItem(str(val)); it2.setFont(fnt)
+            if isinstance(v, list): v = ", ".join(v)
+            it1 = QtWidgets.QTableWidgetItem(k); it1.setFont(fnt)
+            it2 = QtWidgets.QTableWidgetItem(str(v)); it2.setFont(fnt)
             self.table.setItem(row, 0, it1); self.table.setItem(row, 1, it2)
-=======
-            self.input_text.setDisabled(False)
-            if hasattr(self, "thinking_msg"):
-                self.thinking_msg.hide()
-
-    def populate_table(self, data):
-        self.tableWidget.setRowCount(0)
-        for row, (field, value) in enumerate(data.items()):
-            self.tableWidget.insertRow(row)
-            field_item = QtWidgets.QTableWidgetItem(field)
-            if isinstance(value, list):
-                value = ", ".join(value)
-            value_item = QtWidgets.QTableWidgetItem(str(value))
-            field_item.setFont(QtGui.QFont("Segoe UI", 11))
-            value_item.setFont(QtGui.QFont("Segoe UI", 11))
-            self.tableWidget.setItem(row, 0, field_item)
-            self.tableWidget.setItem(row, 1, value_item)
->>>>>>> 650dc2b (design edit)
 
     def _save_report(self):
         if not getattr(self, "current_data", None):
             QtWidgets.QMessageBox.warning(self, self.tr("Save Data Error"), self.tr("Please process input first."))
             return
-<<<<<<< HEAD
         self.lbl_status.setText(self.tr("Status: Saving report…"))
+        self.btn_report.setDown(True); QtCore.QTimer.singleShot(140, lambda: self.btn_report.setDown(False))
         try:
             nm = self.current_data.get("Name","Unknown")
             safe = "".join(c for c in nm if c.isalnum() or c in (" ","_")).replace(" ","_") or "Unknown"
@@ -1242,56 +799,12 @@ class ExtractionTab(QtWidgets.QWidget):
                 json.dump(self.current_data, f, indent=4, ensure_ascii=False)
             QtWidgets.QMessageBox.information(self, self.tr("Report"), self.tr("Saved:\n") + pdf + "\n" + jsn)
             self.lbl_status.setText(self.tr("Status: Report created."))
-=======
-        self.status_label.setText(self.tr("Status: Saving report..."))
-
-        # Show pressed state
-        self.save_pdf_json_button.setDown(True)
-        QtCore.QTimer.singleShot(140, lambda: self.save_pdf_json_button.setDown(False))
-
-        try:
-            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-            save_directory = os.path.join(desktop, "reports")
-            if not os.path.exists(save_directory):
-                os.makedirs(save_directory)
-            client_name = self.current_data.get("Name", "Unknown")
-            base_filename = "".join(c for c in client_name if c.isalnum() or c in (' ', '_')).replace(" ", "_") or "Unknown"
-
-            pdf_file_path = os.path.join(save_directory, f"{base_filename}_report.pdf")
-            json_file_path = os.path.join(save_directory, f"{base_filename}_report.json")
-
-            try:
-                generate_pdf_report(self.current_data, pdf_file_path)
-            except Exception as report_error:
-                QtWidgets.QMessageBox.critical(self, self.tr("Report Creation Error"),
-                                               self.tr("An error occurred while creating the report:\n") + str(report_error))
-                self.status_label.setText(self.tr("Status: Error in report creation."))
-                return
-
-            with open(json_file_path, "w", encoding="utf-8") as f:
-                json.dump(self.current_data, f, indent=4, ensure_ascii=False)
-
-            report_box = QtWidgets.QMessageBox(self)
-            report_box.setWindowTitle(self.tr("Report Created"))
-            report_box.setText(self.tr("Report saved as PDF and JSON:\n") + pdf_file_path + "\n" + json_file_path)
-            report_box.setStandardButtons(QtWidgets.QMessageBox.Ok)
-            QtCore.QTimer.singleShot(1500, report_box.accept)
-            report_box.exec_()
-            self.status_label.setText(self.tr("Status: Report created."))
->>>>>>> 650dc2b (design edit)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, self.tr("Save Data Error"), str(e))
             self.lbl_status.setText(self.tr("Status: Error saving report."))
 
-<<<<<<< HEAD
     def _append_excel(self):
-=======
-    def append_client_name_to_excel(self):
-        # Show pressed state
-        self.append_excel_button.setDown(True)
-        QtCore.QTimer.singleShot(140, lambda: self.append_excel_button.setDown(False))
-
->>>>>>> 650dc2b (design edit)
+        self.btn_excel.setDown(True); QtCore.QTimer.singleShot(140, lambda: self.btn_excel.setDown(False))
         try:
             from openpyxl import Workbook, load_workbook
         except ImportError:
@@ -1302,88 +815,42 @@ class ExtractionTab(QtWidgets.QWidget):
         if os.path.exists(path):
             wb = load_workbook(path); ws = wb.active
         else:
-<<<<<<< HEAD
             wb = Workbook(); ws = wb.active; ws["A1"] = "Client Name"
         nm = (getattr(self, "current_data", {}) or {}).get("Name","Unknown")
         ws.append([nm]); wb.save(path)
         QtWidgets.QMessageBox.information(self, self.tr("Excel"), self.tr("Appended to: ") + path)
-        self.lbl_status.setText(self.tr("Status: Client name sent to Excel."))
+        self.lbl_status.setText(self.tr("Status: Client name sent to Excel. Status: All done."))
+
+    def _aaa(self):
+        self.lbl_status.setText(self.tr("Status: Starting automation sequence…"))
+        self._delayed_process()
+        self._t1.start(1200); self._t2.start(2200)
+
+    def _toggle_voice(self):
+        if self.voice.isEnabled():
+            self.voice.setEnabled(False)
+            self.btn_pause_voice.setText(self.tr("Resume Voice"))
+            self.lbl_status.setText(self.tr("Status: Voice input paused."))
+        else:
+            self.voice.setEnabled(True)
+            self.btn_pause_voice.setText(self.tr("Pause Voice"))
+            self.lbl_status.setText(self.tr("Status: Voice input resumed."))
 
     def _open_agent(self):
+        # Build steps and run with simulation (0.7s per log line shown)
         steps = ["insert_db", "followup_rule", "tag_status", "generate_pdf", "write_json"]
         ctx = {"data": dict(getattr(self, "current_data", {}) or {})}
         dlg = AgentSimDialog(self.agent, steps, ctx, self)
         dlg.exec_()
 
-# ---------- Standalone ----------
+# ---------- Standalone test ----------
 if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
-    try:
-        from UI.design_system import apply_global_theme, apply_window_backdrop
-        apply_global_theme(app, base_point_size=11)
-    except Exception:
-        app.setStyle("Fusion")
-    w = ExtractionTab(); w.resize(1100, 720); w.show()
-    try:
-        from UI.design_system import apply_window_backdrop
-        apply_window_backdrop(w, prefer_mica=True)
-    except Exception:
-        pass
-=======
-            wb = Workbook()
-            ws = wb.active
-            ws["A1"] = "Client Name"
-        client_name = (getattr(self, "current_data", {}) or {}).get("Name", "Unknown")
-        ws.append([client_name])
-        wb.save(excel_path)
-
-        excel_box = QtWidgets.QMessageBox(self)
-        excel_box.setWindowTitle(self.tr("Excel"))
-        excel_box.setText(self.tr("Client name appended to Excel!\nFile path: ") + excel_path)
-        excel_box.setStandardButtons(QtWidgets.QMessageBox.Ok)
-        QtCore.QTimer.singleShot(1500, excel_box.accept)
-        excel_box.exec_()
-        self.status_label.setText(self.tr("Status: Client name sent to Excel. Status: All done."))
-
-    def automate_aaa(self):
-        self.status_label.setText(self.tr("Status: Starting automation sequence..."))
-        # Use timers wired in __init__
-        self.delayed_process_input()
-        self.aaa_timer1.start(1200)  # save shortly after processing starts
-        self.aaa_timer2.start(2200)  # then excel append
-
-    def _aaa_save_step(self):
-        self.save_data()
-        self.status_label.setText(self.tr("Status: Report created."))
-
-    def _aaa_excel_step(self):
-        self.append_client_name_to_excel()
-        self.status_label.setText(self.tr("Status: All done."))
-        if hasattr(self, "current_data"):
-            self.switchToAppointments.emit(self.current_data.get("Name", "Unknown"))
-
-    def toggle_voice_input(self):
-        if self.voice_widget_ar.isEnabled():
-            self.voice_widget_ar.setEnabled(False)
-            self.pause_voice_btn.setText(self.tr("Resume Voice"))
-            self.status_label.setText(self.tr("Status: Voice input paused."))
-        else:
-            self.voice_widget_ar.setEnabled(True)
-            self.pause_voice_btn.setText(self.tr("Pause Voice"))
-            self.status_label.setText(self.tr("Status: Voice input resumed."))
-
-if __name__ == "__main__":
-    import sys
-    app = QtWidgets.QApplication(sys.argv)
-    # Try to apply ModernTheme automatically when running this widget standalone
     try:
         from modern_theme import ModernTheme
         ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
     except Exception:
         pass
-    widget = ExtractionTab()
-    widget.resize(900, 700)
-    widget.show()
->>>>>>> 650dc2b (design edit)
+    w = ExtractionTab(); w.resize(900, 700); w.show()
     sys.exit(app.exec_())

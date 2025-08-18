@@ -1,28 +1,37 @@
-Set-Content -Path .gitignore -Value @"
-# IDE
-.idea/
-.vscode/
-
-# Python cache
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# Virtual envs
+.env
 .venv/
 venv/
-
-# Build/Dist
-build/
+ENV/
+*.egg-info/
 dist/
+build/
 
-# Local data / binaries
-*.db
-*.h5
+# PyCharm / VSCode
+.idea/
+.vscode/
 
-# Env
-.env
-"@
-git add .gitignore
-json/
+# OS junk
+.DS_Store
+Thumbs.db
+
+# App data / caches
+json/*.json
+logs/
+cache/
+
+# Models (huge; do NOT commit)
+models/
+*.bin
+*.gguf
+*.pt
+*.safetensors
+*.onnx
+
+# Hugging Face cache
+**/.cache/
+*.lock
