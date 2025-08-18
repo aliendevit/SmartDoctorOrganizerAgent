@@ -1,0 +1,319 @@
+
+{
+  "Language": {
+    "en": "Language",
+    "ar": "اللغة"
+  },
+  "Data Extraction": {
+    "en": "Data Extraction",
+    "ar": "استخراج البيانات"
+  },
+  "Appointments": {
+    "en": "Appointments",
+    "ar": "المواعيد"
+  },
+  "Assistant Bot": {
+    "en": "Assistant Bot",
+    "ar": "المساعد الذكي"
+  },
+  "Accounts": {
+    "en": "Accounts",
+    "ar": "الحسابات"
+  },
+  "Client Management": {
+    "en": "Client Management",
+    "ar": "إدارة العملاء"
+  },
+  "Dashboard": {
+    "en": "Dashboard",
+    "ar": "لوحة المعلومات"
+  },
+  "Voice Input ({0})": {
+    "en": "Voice Input ({0})",
+    "ar": "إدخال صوتي ({0})"
+  },
+  "Listening... ({0})": {
+    "en": "Listening... ({0})",
+    "ar": "جارٍ الاستماع... ({0})"
+  },
+  "Name": {
+    "en": "Name",
+    "ar": "الاسم"
+  },
+   "Age": {
+    "en": "Age",
+    "ar": "العمر"
+  },
+  "Name:": {
+    "en": "Name:",
+    "ar": "الاسم:"
+  },
+   "Age:": {
+    "en": "Age:",
+    "ar": "العمر:"
+  },
+  "Symptoms": {
+    "en": "Symptoms:",
+    "ar": "الاعراض"
+  },
+   "Notes:": {
+    "en": "Notes:",
+    "ar": "ملاحظات:"
+  },
+  "Personal Information": {
+    "en": "Personal Information",
+    "ar": "المعلومات الشخصية"
+  },
+   "Appointment Details": {
+    "en": "Appointment Details",
+    "ar": "تفاصيل الموعد"
+  },
+  "Payment Information": {
+    "en": "Payment Information",
+    "ar": "معلومات الدفع"
+  },
+   "Add Client": {
+    "en": "Add Client",
+    "ar": "اضف عميل"
+  },
+   "Total Paid": {
+    "en": "Total Paid",
+    "ar": "مجموع المدفوغ"
+  },
+   "Owed": {
+    "en": "Owed",
+    "ar": "الملزم دفعه"
+  },
+  "Pause Voice": {
+    "en": "Pause Voice",
+    "ar": "إيقاف الصوت مؤقتاً"
+  },
+  "Load Test Data": {
+    "en": "Load Test Data",
+    "ar": "تحميل بيانات تجريبية"
+  },
+  "Process Input": {
+    "en": "Process Input",
+    "ar": "معالجة الإدخال"
+  },
+  "Field": {
+    "en": "Field",
+    "ar": "الحقل"
+  },
+  "Value": {
+    "en": "Value",
+    "ar": "القيمة"
+  },
+  "Create Report": {
+    "en": "Create Report",
+    "ar": "إنشاء تقرير"
+  },
+  "Append Name to Clients File": {
+    "en": "Append Name to Clients File",
+    "ar": "إضافة الاسم إلى ملف العملاء"
+  },
+  "Start AAA": {
+    "en": "Start AAA",
+    "ar": "بدء AAA"
+  },
+  "Status: Ready": {
+    "en": "Status: Ready",
+    "ar": "الحالة: جاهز"
+  },
+  "Status: Processing input...": {
+    "en": "Status: Processing input...",
+    "ar": "الحالة: جاري معالجة الإدخال..."
+  },
+  "Generating output... Please wait.": {
+    "en": "Generating output... Please wait.",
+    "ar": "جارٍ توليد النتائج... الرجاء الانتظار."
+  },
+  "Input Error": {
+    "en": "Input Error",
+    "ar": "خطأ في الإدخال"
+  },
+  "Please enter some text.": {
+    "en": "Please enter some text.",
+    "ar": "يرجى إدخال بعض النص."
+  },
+  "Processing Error": {
+    "en": "Processing Error",
+    "ar": "خطأ في المعالجة"
+  },
+  "An error occurred:\n": {
+    "en": "An error occurred:\n",
+    "ar": "حدث خطأ:\n"
+  },
+  "Save Data Error": {
+    "en": "Save Data Error",
+    "ar": "خطأ في حفظ البيانات"
+  },
+  "An error occurred while creating the report:\n": {
+    "en": "An error occurred while creating the report:\n",
+    "ar": "حدث خطأ أثناء إنشاء التقرير:\n"
+  },
+  "Report Created": {
+    "en": "Report Created",
+    "ar": "تم إنشاء التقرير"
+  },
+  "Report saved as PDF and JSON:\n": {
+    "en": "Report saved as PDF and JSON:\n",
+    "ar": "تم حفظ التقرير بصيغة PDF و JSON:\n"
+  },
+  "Excel": {
+    "en": "Excel",
+    "ar": "اكسل"
+  },
+  "Client name appended to Excel!\nFile path: ": {
+    "en": "Client name appended to Excel!\nFile path: ",
+    "ar": "تم إضافة اسم العميل إلى ملف الاكسل!\nالمسار: "
+  },
+  "Status: Client name sent to Excel. Status: All done.": {
+    "en": "Status: Client name sent to Excel. Status: All done.",
+    "ar": "الحالة: تم إرسال اسم العميل إلى الاكسل. الحالة: تم الانتهاء."
+  },
+  "Outstanding Payments": {
+    "en": "Outstanding Payments",
+    "ar": "المدفوعات المتأخرة"
+  },
+  "Loading outstanding payments...": {
+    "en": "Loading outstanding payments...",
+    "ar": "جارٍ تحميل المدفوعات المتأخرة..."
+  },
+  "Refresh Outstanding Payments": {
+    "en": "Refresh Outstanding Payments",
+    "ar": "تحديث المدفوعات المتأخرة"
+  },
+  "Total Amount": {
+    "en": "Total Amount",
+    "ar": "المبلغ الاجمالي"
+  },
+  "Outstanding": {
+    "en": "Outstanding",
+    "ar": "المبلغ المتبقي"
+  },
+  "Inventory Summary": {
+    "en": "Inventory Summary",
+    "ar": "ملخص المخزون"
+  },
+  "Inventory Period (days):": {
+    "en": "Inventory Period (days):",
+    "ar": "فترة المخزون (أيام):"
+  },
+  "Loading inventory summary...": {
+    "en": "Loading inventory summary...",
+    "ar": "جارٍ تحميل ملخص المخزون..."
+  },
+  "Refresh Inventory Summary": {
+    "en": "Refresh Inventory Summary",
+    "ar": "تحديث ملخص المخزون"
+  },
+  "Archive Inventory": {
+    "en": "Archive Inventory",
+    "ar": "أرشفة المخزون"
+  },
+  "Show Unpaid Clients": {
+    "en": "Show Unpaid Clients",
+    "ar": "عرض العملاء غير المدفوعين"
+  },
+  "Archived Inventory": {
+    "en": "Archived Inventory",
+    "ar": "المخزون المؤرشف"
+  },
+  "Period": {
+    "en": "Period",
+    "ar": "الفترة"
+  },
+  "Total Receipts": {
+    "en": "Total Receipts",
+    "ar": "إجمالي الإيصالات"
+  },
+  "Total Outstanding": {
+    "en": "Total Outstanding",
+    "ar": "الإجمالي المتأخر"
+  },
+  "Unpaid Clients": {
+    "en": "Unpaid Clients",
+    "ar": "العملاء غير المدفوعين"
+  },
+  "Patients with outstanding payments:": {
+    "en": "Patients with outstanding payments:",
+    "ar": "المرضى ذوو المدفوعات المتأخرة:"
+  },
+  "Total Outstanding:": {
+    "en": "Total Outstanding:",
+    "ar": "الإجمالي المتأخر:"
+  },
+  "to": {
+    "en": "to",
+    "ar": "إلى"
+  },
+  "Client Summary": {
+    "en": "Client Summary",
+    "ar": "ملخص العملاء"
+  },
+  "Loading client summary...": {
+    "en": "Loading client summary...",
+    "ar": "جارٍ تحميل ملخص العملاء..."
+  },
+  "Refresh Client Summary": {
+    "en": "Refresh Client Summary",
+    "ar": "تحديث ملخص العملاء"
+  },
+  "Total Clients:": {
+    "en": "Total Clients:",
+    "ar": "إجمالي العملاء:"
+  },
+  "Average Age:": {
+    "en": "Average Age:",
+    "ar": "متوسط العمر:"
+  },
+  "Total Revenue:": {
+    "en": "Total Revenue:",
+    "ar": "إجمالي الإيرادات:"
+  },
+  "Archive": {
+    "en": "Archive",
+    "ar": "أرشيف"
+  },
+  "Summary for ": {
+    "en": "Summary for ",
+    "ar": "ملخص للفترة "
+  },
+  " archived successfully.": {
+    "en": " archived successfully.",
+    "ar": " تم أرشفته بنجاح."
+  },
+  "Scheduled Appointments": {
+    "en": "Scheduled Appointments",
+    "ar": "المواعيد المجدولة"
+  },
+  "Refresh Appointments": {
+    "en": "Refresh Appointments",
+    "ar": "تحديث المواعيد"
+  },
+  "Client Name": {
+    "en": "Client Name",
+    "ar": "اسم العميل"
+  },
+  "Appointment Date": {
+    "en": "Appointment Date",
+    "ar": "تاريخ الموعد"
+  },
+  "Appointment Time": {
+    "en": "Appointment Time",
+    "ar": "وقت الموعد"
+  },
+  "Your Power Assistant": {
+    "en": "Your Power Assistant",
+    "ar": "مساعدك القوي"
+  },
+  "Add New Client": {
+    "en": "Add New Client",
+    "ar": "إضافة عميل جديد"
+  },
+  "Load/Edit Client": {
+    "en": "Load/Edit Client",
+    "ar": "تحميل/تعديل العميل"
+  }
+}

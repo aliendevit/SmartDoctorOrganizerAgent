@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# PyCharm / VSCode
+.idea/
+.vscode/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# App data / caches
+json/*.json
+logs/
+cache/
+
+# Models (huge; do NOT commit)
+models/
+*.bin
+*.gguf
+*.pt
+*.safetensors
+*.onnx
+
+# Hugging Face cache
+**/.cache/
+*.lock
