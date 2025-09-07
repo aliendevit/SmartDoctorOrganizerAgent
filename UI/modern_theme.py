@@ -1,370 +1,298 @@
-# modern_theme.py
-from PyQt5 import QtCore, QtGui, QtWidgets
+# UI/modern_theme.py
+# Glassy (frosted) theme for a clinical app UI + optional tab font scaling.
+# Works with PyQt5 (and falls back to PySide2 if needed).
 
-class ModernTheme:
-    LIGHT = "light"
-    DARK = "dark"
+from typing import Optional
 
-    @staticmethod
-    def _palette(mode):
-        p = QtGui.QPalette()
-        if mode == ModernTheme.DARK:
-            # Base colors
-            bg   = QtGui.QColor("#0f172a")  # slate-900
-            card = QtGui.QColor("#111827")  # near-slate
-            base = QtGui.QColor("#111827")
-            text = QtGui.QColor("#e5e7eb")  # gray-200
-            sub  = QtGui.QColor("#9ca3af")  # gray-400
-            acc  = QtGui.QColor("#4f46e5")  # indigo-600
-            hl   = QtGui.QColor("#22c55e")  # green-500
+try:
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QColor, QPalette, QFont
+    from PyQt5.QtWidgets import QApplication, QWidget, QFrame, QGraphicsBlurEffect, QTabWidget
+    QT_LIB = "PyQt5"
+except ImportError:  # Fallback if the project uses PySide2
+    from PySide2.QtCore import Qt
+    from PySide2.QtGui import QColor, QPalette, QFont
+    from PySide2.QtWidgets import QApplication, QWidget, QFrame, QGraphicsBlurEffect, QTabWidget
+    QT_LIB = "PySide2"
 
-            # Assign to palette
-            p.setColor(QtGui.QPalette.Window, bg)
-            p.setColor(QtGui.QPalette.Base, base)
-            p.setColor(QtGui.QPalette.AlternateBase, card)
-            p.setColor(QtGui.QPalette.WindowText, text)
-            p.setColor(QtGui.QPalette.Text, text)
-            p.setColor(QtGui.QPalette.Button, card)
-            p.setColor(QtGui.QPalette.ButtonText, text)
-            p.setColor(QtGui.QPalette.ToolTipBase, card)
-            p.setColor(QtGui.QPalette.ToolTipText, text)
-            p.setColor(QtGui.QPalette.Highlight, acc)
-            p.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor("#ffffff"))
-            p.setColor(QtGui.QPalette.Link, acc)
-            p.setColor(QtGui.QPalette.PlaceholderText, sub)
-            p.setColor(QtGui.QPalette.BrightText, hl)
-        else:
-            # Light
-            bg   = QtGui.QColor("#f8fafc")  # slate-50
-            card = QtGui.QColor("#ffffff")
-            base = QtGui.QColor("#ffffff")
-            text = QtGui.QColor("#0f172a")  # slate-900
-            sub  = QtGui.QColor("#64748b")  # slate-500
-            acc  = QtGui.QColor("#4f46e5")  # indigo-600
-            hl   = QtGui.QColor("#16a34a")  # green-600
+import sys
+import platform
+from typing import Optional
+# -----------------------------
+# Doctor-friendly palette
+# -----------------------------
+COLORS = {
+    "primary": "#3A8DFF",      # calm medical blue
+    "secondary": "#2CBBA6",    # teal / healing
+    "accent": "#7A77FF",       # soft purple
+    "danger": "#FF6B6B",       # coral red (friendly)
+    "bg": "#F5F7FB",           # very light blue-gray
+    "text": "#2E2E2E",         # strong readable text
+    "subtext": "#6C757D",      # muted labels
+    "stroke": "#E7ECF3",       # dividers / outlines
+    "white": "#FFFFFF",
+    "black": "#000000",
+}
 
-            p.setColor(QtGui.QPalette.Window, bg)
-            p.setColor(QtGui.QPalette.Base, base)
-            p.setColor(QtGui.QPalette.AlternateBase, card)
-            p.setColor(QtGui.QPalette.WindowText, text)
-            p.setColor(QtGui.QPalette.Text, text)
-            p.setColor(QtGui.QPalette.Button, card)
-            p.setColor(QtGui.QPalette.ButtonText, text)
-            p.setColor(QtGui.QPalette.ToolTipBase, card)
-            p.setColor(QtGui.QPalette.ToolTipText, text)
-            p.setColor(QtGui.QPalette.Highlight, acc)
-            p.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor("#ffffff"))
-            p.setColor(QtGui.QPalette.Link, acc)
-            p.setColor(QtGui.QPalette.PlaceholderText, sub)
-            p.setColor(QtGui.QPalette.BrightText, hl)
-        return p
 
-    @staticmethod
-    def _stylesheet(mode):
-        is_dark = (mode == ModernTheme.DARK)
-        border  = "#1f2937" if is_dark else "#e5e7eb"
-        card    = "#111827" if is_dark else "#ffffff"
-        hover   = "#374151" if is_dark else "#f3f4f6"
-        text    = "#e5e7eb" if is_dark else "#0f172a"
-        sub     = "#9ca3af" if is_dark else "#64748b"
+def _qcolor(hex_str: str, a: Optional[int] = None) -> QColor:
+    """Create QColor from hex, with optional alpha (0-255)."""
+    c = QColor(hex_str)
+    if a is not None:
+        c.setAlpha(a)
+    return c
 
-        # default indigo accent
-        acc      = "#4f46e5"  # indigo-600
-        acc_hov  = "#4338ca"  # indigo-700
-        acc_prs  = "#3730a3"  # indigo-800
 
-        # accent palettes
-        emerald  = ("#10b981", "#059669", "#047857")
-        sky      = ("#0ea5e9", "#0284c7", "#0369a1")
-        rose     = ("#f43f5e", "#e11d48", "#be123c")
-        amber    = ("#f59e0b", "#d97706", "#b45309")
-        violet   = ("#8b5cf6", "#7c3aed", "#6d28d9")
-        slate    = ("#64748b", "#475569", "#334155")
+# -----------------------------
+# App palette (affects native widgets)
+# -----------------------------
+def apply_palette(app: QApplication) -> None:
+    pal = app.palette()  # start from current
 
-        success  = ("#16a34a", "#15803d", "#166534")
-        warning  = ("#f59e0b", "#d97706", "#b45309")
-        info     = ("#0ea5e9", "#0284c7", "#0369a1")
-        danger   = ("#ef4444", "#dc2626", "#b91c1c")
+    pal.setColor(QPalette.Window, _qcolor(COLORS["bg"]))                # main window background
+    pal.setColor(QPalette.Base, _qcolor(COLORS["white"]))               # text fields, tables base
+    pal.setColor(QPalette.AlternateBase, _qcolor(COLORS["bg"]))         # alternating rows
+    pal.setColor(QPalette.Text, _qcolor(COLORS["text"]))                # primary text
+    pal.setColor(QPalette.WindowText, _qcolor(COLORS["text"]))          # titles
+    pal.setColor(QPalette.Button, _qcolor(COLORS["white"]))             # button base (under QSS)
+    pal.setColor(QPalette.ButtonText, _qcolor(COLORS["text"]))          # button text
+    pal.setColor(QPalette.ToolTipBase, _qcolor(COLORS["white"]))
+    pal.setColor(QPalette.ToolTipText, _qcolor(COLORS["text"]))
+    pal.setColor(QPalette.Highlight, _qcolor(COLORS["primary"]))        # selection highlight
+    pal.setColor(QPalette.HighlightedText, _qcolor(COLORS["white"]))    # selected text
 
-        return f"""
-        * {{
-            outline: 0;
+    app.setPalette(pal)
+
+
+# -----------------------------
+# Glassy QSS (stylesheets)
+# Notes:
+# - Qt doesn't support CSS 'backdrop-filter'. We emulate "frosted" via
+#   semi-transparent backgrounds + optional Blur effect on containers.
+# - Keep sizes modest for clinical readability.
+# -----------------------------
+GLASSY_QSS = f"""
+/* ------- Global ------- */
+QMainWindow, QWidget {{
+    background: rgba(255, 255, 255, 0);   /* allow parent/grandparent to show */
+    color: {COLORS["text"]};
+}}
+
+
+QFrame#GlassPanel, QWidget#GlassPanel {{
+    background: rgba(255, 255, 255, 0.60);    /* glass sheet */
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    border-radius: 16px;
+}}
+
+QGroupBox {{
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px solid {COLORS["stroke"]};
+    border-radius: 12px;
+    margin-top: 14px;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 2px 6px;
+    color: {COLORS["subtext"]};
+    font-weight: 600;
+}}
+
+/* ------- Tabs ------- */
+QTabWidget::pane {{
+    border: 0px;
+    padding: 6px;
+    margin-top: 4px;
+}}
+QTabBar::tab {{
+    background: rgba(255, 255, 255, 0.40);
+    border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 10px;
+    padding: 8px 16px;
+    margin: 4px;
+    color: {COLORS["text"]};
+    font-size: 14px;
+}}
+QTabBar::tab:selected {{
+    background: rgba(58, 141, 255, 0.60);     /* primary blue tint */
+    color: white;
+    font-size: 12px;                           /* smaller when active */
+    font-weight: 700;
+    border: 1px solid rgba(255,255,255,0.55);
+}}
+QTabBar::tab:hover:!selected {{
+    background: rgba(255, 255, 255, 0.55);
+}}
+
+/* ------- Buttons ------- */
+QPushButton {{
+    background: rgba(44, 187, 166, 0.55);      /* teal glass */
+    color: white;
+    border-radius: 12px;
+    padding: 6px 14px;
+    border: 1px solid rgba(255,255,255,0.45);
+    font-size: 14px;
+    font-weight: 600;
+}}
+QPushButton:hover {{
+    background: rgba(44, 187, 166, 0.70);
+}}
+QPushButton:pressed {{
+    background: rgba(44, 187, 166, 0.88);
+}}
+
+/* ------- Inputs ------- */
+QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QDateEdit, QTimeEdit, QDateTimeEdit, QComboBox {{
+    background: rgba(255,255,255,0.65);
+    border: 1px solid rgba(255,255,255,0.40);
+    border-radius: 10px;
+    padding: 6px 10px;
+    selection-background-color: {COLORS["primary"]};
+    selection-color: white;
+}}
+QComboBox::drop-down {{
+    border: 0px;
+    padding-right: 6px;
+}}
+QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QDateEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus, QComboBox:focus {{
+    border: 1px solid {COLORS["primary"]};
+}}
+
+/* ------- Tables ------- */
+QHeaderView::section {{
+    background: rgba(255,255,255,0.55);
+    border: 0px;
+    border-bottom: 1px solid {COLORS["stroke"]};
+    padding: 8px 10px;
+    font-weight: 600;
+    color: {COLORS["subtext"]};
+}}
+QTableView {{
+    background: rgba(255,255,255,0.50);
+    border: 1px solid rgba(255,255,255,0.40);
+    border-radius: 12px;
+    gridline-color: {COLORS["stroke"]};
+    selection-background-color: {COLORS["primary"]};
+    selection-color: white;
+}}
+QTableView::item:selected {{
+    background: {COLORS["primary"]};
+    color: white;
+}}
+
+/* ------- Status / Info ------- */
+QToolTip {{
+    background-color: rgba(255,255,255,0.95);
+    color: {COLORS["text"]};
+    border: 1px solid {COLORS["stroke"]};
+    border-radius: 8px;
+    padding: 6px 8px;
+}}
+
+/* ------- Scrollbars (minimal) ------- */
+QScrollBar:vertical {{
+    background: transparent;
+    width: 10px;
+    margin: 4px;
+}}
+QScrollBar::handle:vertical {{
+    background: rgba(122, 119, 255, 0.6);      /* accent */
+    min-height: 28px;
+    border-radius: 6px;
+}}
+QScrollBar:horizontal {{
+    background: transparent;
+    height: 10px;
+    margin: 4px;
+}}
+QScrollBar::handle:horizontal {{
+    background: rgba(122, 119, 255, 0.6);
+    min-width: 28px;
+    border-radius: 6px;
+}}
+QScrollBar::add-line, QScrollBar::sub-line {{
+    background: transparent;
+    border: none;
+    width: 0px;
+    height: 0px;
+}}
+"""
+
+
+# -----------------------------
+# Optional: "Glass panel" helper
+# - Give any container this effect by:
+#   panel = GlassFrame(); panel.setObjectName("GlassPanel")
+#   (and place child widgets inside)
+# -----------------------------
+class GlassFrame(QFrame):
+    def __init__(self, blur_radius: int = 18, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setObjectName("GlassPanel")
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        # Blur behind the panel contents (visual depth). Keep modest for performance.
+        blur = QGraphicsBlurEffect(self)
+        blur.setBlurRadius(blur_radius)
+        self.setGraphicsEffect(blur)
+
+
+# -----------------------------
+# Optional: active tab font scaling
+# - Keeps active tab slightly smaller (requested behavior)
+# -----------------------------
+def install_tab_font_scaling(tabs: QTabWidget, normal_pt: int = 14, active_pt: int = 12) -> None:
+    bar = tabs.tabBar()
+
+    def refresh(idx: int):
+        # Qt5/Qt6 lacks per-tab font setter; we rely on QSS (already set) + repaint.
+        # Force a repaint to apply size delta smoothly.
+        for i in range(bar.count()):
+            # Nudge text to trigger layout refresh on some platforms
+            bar.setTabText(i, bar.tabText(i))
+        bar.update()
+
+    tabs.currentChanged.connect(refresh)
+    refresh(tabs.currentIndex())
+
+
+# -----------------------------
+# Entry point to apply theme
+# -----------------------------
+def apply_glassy_theme(app: QApplication, *, use_palette: bool = True) -> None:
+    """
+    Apply the glassy clinical theme to the entire app.
+    Call early in main.py, before creating main windows.
+        from UI import modern_theme
+        modern_theme.apply_glassy_theme(app)
+    """
+    if use_palette:
+        apply_palette(app)
+    app.setStyleSheet(GLASSY_QSS)
+
+
+# -----------------------------
+# Convenience: apply to a top-level window
+# (background gradient + containment panel)
+# -----------------------------
+def decorate_window_as_glassy(window: QWidget, *, with_panel: bool = False, blur_radius: int = 18) -> None:
+    """
+    Optional helper to give a subtle clinical gradient and, optionally, a frosted panel.
+    """
+    # Gentle clinical gradient on root
+    window.setStyleSheet(window.styleSheet() + f"""
+        {window.metaObject().className()} {{
+            background: qlineargradient(
+                x1:0 y1:0, x2:0 y2:1,
+                stop:0 rgba(245, 247, 251, 1.0),
+                stop:1 rgba(232, 239, 249, 1.0)
+            );
         }}
-        QMainWindow, QWidget {{
-            background: transparent;
-            color: {text};
-            font-size: 11pt;
-        }}
-
-        /* Cards / group boxes */
-        QFrame[modernCard="true"], QGroupBox {{
-            background: {card};
-            border: 1px solid {border};
-            border-radius: 14px;
-        }}
-        QGroupBox::title {{
-            subcontrol-origin: margin;
-            left: 12px;
-            padding: 6px 8px 0 8px;
-            color: {sub};
-            font-weight: 600;
-        }}
-
-        /* ===== Buttons: default (primary / indigo) ===== */
-        QPushButton {{
-            background: {acc};
-            color: #ffffff;
-            border-radius: 10px;
-            padding: 8px 14px;
-            border: none;
-        }}
-        /* keep text visible in all states */
-        QPushButton:enabled              {{ color: #ffffff; }}
-        QPushButton:hover                {{ background: {acc_hov};  color: #ffffff; }}
-        QPushButton:pressed              {{ background: {acc_prs};  color: #ffffff; }}
-        QPushButton:disabled             {{ background: {border};   color: {sub}; }}
-
-        /* Ghost (outlined) — explicit colors on all states */
-        QPushButton[variant="ghost"],
-        QPushButton[variant="ghost"]:hover,
-        QPushButton[variant="ghost"]:pressed {{
-            background: transparent;
-            color: {text};
-            border: 1px solid {border};
-            font-weight: 600;
-        }}
-        QPushButton[variant="ghost"]:hover   {{ background: {hover}; }}
-        QPushButton[variant="ghost"]:disabled{{ color: {sub}; border-color: {border}; }}
-
-        /* Danger / Success / Warning / Info (solid) */
-        QPushButton[variant="danger"],
-        QPushButton[variant="danger"]:hover,
-        QPushButton[variant="danger"]:pressed {{ color: #ffffff; }}
-        QPushButton[variant="danger"]         {{ background: {danger[0]}; }}
-        QPushButton[variant="danger"]:hover   {{ background: {danger[1]}; }}
-        QPushButton[variant="danger"]:pressed {{ background: {danger[2]}; }}
-
-        QPushButton[variant="success"],
-        QPushButton[variant="success"]:hover,
-        QPushButton[variant="success"]:pressed {{ color: #ffffff; }}
-        QPushButton[variant="success"]         {{ background: {success[0]}; }}
-        QPushButton[variant="success"]:hover   {{ background: {success[1]}; }}
-        QPushButton[variant="success"]:pressed {{ background: {success[2]}; }}
-
-        QPushButton[variant="warning"]        {{ background: {warning[0]}; color: #111827; }}
-        QPushButton[variant="warning"]:hover  {{ background: {warning[1]}; color: #111827; }}
-        QPushButton[variant="warning"]:pressed{{ background: {warning[2]}; color: #ffffff; }}
-
-        QPushButton[variant="info"],
-        QPushButton[variant="info"]:hover,
-        QPushButton[variant="info"]:pressed    {{ color: #ffffff; }}
-        QPushButton[variant="info"]            {{ background: {info[0]}; }}
-        QPushButton[variant="info"]:hover      {{ background: {info[1]}; }}
-        QPushButton[variant="info"]:pressed    {{ background: {info[2]}; }}
-
-        /* ===== Solid accents (per-button) — keep text readable ===== */
-        QPushButton[accent="emerald"],
-        QPushButton[accent="emerald"]:hover,
-        QPushButton[accent="emerald"]:pressed {{ color: #ffffff; }}
-        QPushButton[accent="emerald"]         {{ background: {emerald[0]}; }}
-        QPushButton[accent="emerald"]:hover   {{ background: {emerald[1]}; }}
-        QPushButton[accent="emerald"]:pressed {{ background: {emerald[2]}; }}
-
-        QPushButton[accent="sky"],
-        QPushButton[accent="sky"]:hover,
-        QPushButton[accent="sky"]:pressed     {{ color: #ffffff; }}
-        QPushButton[accent="sky"]             {{ background: {sky[0]}; }}
-        QPushButton[accent="sky"]:hover       {{ background: {sky[1]}; }}
-        QPushButton[accent="sky"]:pressed     {{ background: {sky[2]}; }}
-
-        QPushButton[accent="rose"],
-        QPushButton[accent="rose"]:hover,
-        QPushButton[accent="rose"]:pressed    {{ color: #ffffff; }}
-        QPushButton[accent="rose"]            {{ background: {rose[0]}; }}
-        QPushButton[accent="rose"]:hover      {{ background: {rose[1]}; }}
-        QPushButton[accent="rose"]:pressed    {{ background: {rose[2]}; }}
-
-        QPushButton[accent="amber"]           {{ background: {amber[0]}; color: #111827; }}
-        QPushButton[accent="amber"]:hover     {{ background: {amber[1]}; color: #111827; }}
-        QPushButton[accent="amber"]:pressed   {{ background: {amber[2]}; color: #ffffff; }}
-
-        QPushButton[accent="violet"],
-        QPushButton[accent="violet"]:hover,
-        QPushButton[accent="violet"]:pressed  {{ color: #ffffff; }}
-        QPushButton[accent="violet"]          {{ background: {violet[0]}; }}
-        QPushButton[accent="violet"]:hover    {{ background: {violet[1]}; }}
-        QPushButton[accent="violet"]:pressed  {{ background: {violet[2]}; }}
-
-        QPushButton[accent="slate"],
-        QPushButton[accent="slate"]:hover,
-        QPushButton[accent="slate"]:pressed   {{ color: #ffffff; }}
-        QPushButton[accent="slate"]           {{ background: {slate[0]}; }}
-        QPushButton[accent="slate"]:hover     {{ background: {slate[1]}; }}
-        QPushButton[accent="slate"]:pressed   {{ background: {slate[2]}; }}
-
-        /* ===== Outlined (ghost) + accent ===== */
-        QPushButton[variant="ghost"][accent="emerald"],
-        QPushButton[variant="ghost"][accent="emerald"]:hover,
-        QPushButton[variant="ghost"][accent="emerald"]:pressed {{
-            color: {emerald[0]}; border: 1px solid {emerald[0]};
-        }}
-        QPushButton[variant="ghost"][accent="emerald"]:hover {{
-            background: rgba(16,185,129,0.12);
-        }}
-
-        QPushButton[variant="ghost"][accent="sky"],
-        QPushButton[variant="ghost"][accent="sky"]:hover,
-        QPushButton[variant="ghost"][accent="sky"]:pressed {{
-            color: {sky[0]}; border: 1px solid {sky[0]};
-        }}
-        QPushButton[variant="ghost"][accent="sky"]:hover {{
-            background: rgba(14,165,233,0.14);
-        }}
-
-        QPushButton[variant="ghost"][accent="rose"],
-        QPushButton[variant="ghost"][accent="rose"]:hover,
-        QPushButton[variant="ghost"][accent="rose"]:pressed {{
-            color: {rose[0]}; border: 1px solid {rose[0]};
-        }}
-        QPushButton[variant="ghost"][accent="rose"]:hover {{
-            background: rgba(244,63,94,0.14);
-        }}
-
-        QPushButton[variant="ghost"][accent="amber"],
-        QPushButton[variant="ghost"][accent="amber"]:hover,
-        QPushButton[variant="ghost"][accent="amber"]:pressed {{
-            color: {amber[0]}; border: 1px solid {amber[0]};
-        }}
-        QPushButton[variant="ghost"][accent="amber"]:hover {{
-            background: rgba(245,158,11,0.18);
-        }}
-
-        QPushButton[variant="ghost"][accent="violet"],
-        QPushButton[variant="ghost"][accent="violet"]:hover,
-        QPushButton[variant="ghost"][accent="violet"]:pressed {{
-            color: {violet[0]}; border: 1px solid {violet[0]};
-        }}
-        QPushButton[variant="ghost"][accent="violet"]:hover {{
-            background: rgba(139,92,246,0.14);
-        }}
-
-        QPushButton[variant="ghost"][accent="slate"],
-        QPushButton[variant="ghost"][accent="slate"]:hover,
-        QPushButton[variant="ghost"][accent="slate"]:pressed {{
-            color: {slate[0]}; border: 1px solid {slate[0]};
-        }}
-        QPushButton[variant="ghost"][accent="slate"]:hover {{
-            background: rgba(100,116,139,0.14);
-        }}
-
-        /* Inputs */
-        QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit, QTimeEdit {{
-            background: {card};
-            border: 1px solid {border};
-            border-radius: 10px;
-            padding: 8px 10px;
-            selection-background-color: {acc};
-            selection-color: #ffffff;
-        }}
-        QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QComboBox:focus,
-        QSpinBox:focus, QDoubleSpinBox:focus, QDateEdit:focus, QTimeEdit:focus {{
-            border: 1px solid {acc};
-        }}
-
-        /* Table */
-        QTableView, QTableWidget {{
-            background: {card};
-            border: 1px solid {border};
-            border-radius: 12px;
-            gridline-color: {border};
-            selection-background-color: {acc};
-            selection-color: #ffffff;
-        }}
-        QHeaderView::section {{
-            background: {hover};
-            color: {text};
-            border: none;
-            padding: 10px 8px;
-            font-weight: 600;
-        }}
-        QTableView::item:hover, QTableWidget::item:hover {{ background: {hover}; }}
-
-        /* Tabs */
-        QTabWidget::pane {{ border: none; }}
-        QTabBar::tab {{
-            background: transparent;
-            color: {sub};
-            border: none;
-            padding: 10px 16px;
-            margin: 2px 6px;
-            border-radius: 10px;
-            text-align: left;
-            min-width: 160px;
-        }}
-        QTabBar::tab:selected {{ color: {text}; background: {hover}; font-weight: 600; }}
-        QTabBar::tab:hover   {{ background: {hover}; color: {text}; }}
-
-        /* Toolbar / Menus */
-        QToolBar {{
-            background: {card};
-            border: 1px solid {border};
-            border-radius: 12px;
-            padding: 6px;
-        }}
-        QMenu {{
-            background: {card};
-            border: 1px solid {border};
-            border-radius: 10px;
-        }}
-        QMenu::item {{ padding: 8px 12px; }}
-        QMenu::item:selected {{ background: {hover}; }}
-
-        /* Scrollbars */
-        QScrollBar:vertical, QScrollBar:horizontal {{
-            background: transparent;
-            border: none;
-            margin: 4px;
-        }}
-        QScrollBar::handle:vertical, QScrollBar::handle:horizontal {{
-            background: {hover};
-            border-radius: 8px;
-            min-height: 24px;
-            min-width: 24px;
-        }}
-        QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
-        """
-
-    @staticmethod
-    def apply(app: QtWidgets.QApplication, mode="dark", base_point_size=11, rtl=False):
-        # HiDPI
-        QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
-        QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
-        app.setStyle("Fusion")
-
-        # Font
-        font = QtGui.QFont()
-        for fam in ("Segoe UI", "Inter", "Noto Sans", "Arial"):
-            font.setFamily(fam)
-            break
-        font.setPointSize(base_point_size)
-        app.setFont(font)
-
-        # Palette + stylesheet
-        app.setPalette(ModernTheme._palette(mode))
-        app.setStyleSheet(ModernTheme._stylesheet(mode))
-
-        # Layout direction
-        app.setLayoutDirection(QtCore.Qt.RightToLeft if rtl else QtCore.Qt.LeftToRight)
-
-        # Remember current mode on the app
-        app.setProperty("ModernThemeMode", mode)
-
-    @staticmethod
-    def toggle(app):
-        # Prefer stored property; fallback to palette inspection
-        current = app.property("ModernThemeMode")
-        if current not in (ModernTheme.LIGHT, ModernTheme.DARK):
-            win_color = app.palette().color(QtGui.QPalette.Window).name().lower()
-            current = ModernTheme.DARK if win_color in ("#0f172a", "#111827") else ModernTheme.LIGHT
-        next_mode = ModernTheme.LIGHT if current == ModernTheme.DARK else ModernTheme.DARK
-        ModernTheme.apply(app, mode=next_mode, base_point_size=app.font().pointSize())
+    """)
+    if with_panel:
+        # If you want a single central frosted container, instantiate GlassFrame()
+        # in your window code and set layout accordingly.
+        panel = GlassFrame(blur_radius=blur_radius, parent=window)
+        panel.setObjectName("GlassPanel")
+        panel.show()
+        # Positioning/layout of this panel is left to the caller (setGeometry or layouts).

@@ -46,13 +46,13 @@ class PhotoField(QtWidgets.QFrame):
         # Visuals (works with dark/glass)
         self.setStyleSheet("""
         QFrame#GlassPanel {
-            background: rgba(255,255,255,0.65);
+            background: rgba(255,255,255,0.50);
             border-radius: 12px;
-            border: 1px dashed rgba(58,141,255,0.55);
+            border: 1px dashed rgba(122,119,255,0.6);
         }
         QFrame#GlassPanel:hover {
             border: 1px dashed rgba(58,141,255,0.9);
-            background: rgba(255,255,255,0.75);
+            background: rgba(255,255,255,0.60);
         }
         """)
 

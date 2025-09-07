@@ -1,219 +1,219 @@
-# UI/design_system.py
-from __future__ import annotations
-from PyQt5 import QtCore, QtGui, QtWidgets
-import sys, platform
+# ui/design_system.py
+# Clinic-ready Qt theme with readable tabs, dark zebra rows, and sensible defaults.
+# Supports "dark", "light", and "high_contrast" modes.
 
-# ---------- Design Tokens ----------
-COLORS = {
-    "text":        "#1f2937",  # slate-800
-    "textDim":     "#334155",  # slate-600
-    "muted":       "#64748b",  # slate-500
-    "primary":     "#3A8DFF",  # doctor calm blue
-    "info":        "#2CBBA6",  # teal
-    "success":     "#7A77FF",  # soft purple
-    "stroke":      "#E5EFFA",  # pale blue stroke
-    "panel":       "rgba(255,255,255,0.55)",
-    "panelInner":  "rgba(255,255,255,0.65)",
-    "inputBg":     "rgba(255,255,255,0.88)",
-    "stripe":      "rgba(240,247,255,0.65)",
-    "selBg":       "#3A8DFF",
-    "selFg":       "#ffffff",
-}
+from PyQt5 import QtWidgets, QtGui, QtCore
 
-GLOBAL_QSS = f"""
-/* -------- Base -------- */
-* {{
-  font-family: 'Segoe UI', Arial;
-  font-size: 14px;
-  color: {COLORS["text"]};
-}}
-QLabel {{ color: #111827; }}
+class DS:
+    # Base typography & spacing
+    FONT   = "Segoe UI"
+    RADIUS = 12
+    GAP    = 10
+    PAD    = 12
 
-/* -------- Cards / Panels -------- */
-QFrame[modernCard="true"],
-QGroupBox[modernCard="true"],
-QWidget[modernCard="true"] {{
-  background: {COLORS["panel"]};
-  border: 1px solid rgba(255,255,255,0.45);
-  border-radius: 12px;
-}}
+    # ---- Dark palette (default) ----
+    name     = "dark"
+    BG       = "#0f172a"  # cards/surfaces
+    BG_SOFT  = "#0b1020"  # inputs/tables
+    FRAME    = "#1f2937"
+    TEXT     = "#e5e7eb"
+    TEXT_MID = "#cbd5e1"
+    TEXT_DIM = "#94a3b8"
+    PRI      = "#0ea5e9"
+    OK       = "#16a34a"
+    WARN     = "#f59e0b"
+    ERR      = "#ef4444"
+    VIOLET   = "#8b5cf6"
 
-/* CollapsibleSection inner surface (if used) */
-QWidget > QWidget#SectionContent {{
-  background: {COLORS["panelInner"]};
-  border: 1px solid {COLORS["stroke"]};
-  border-radius: 10px;
-}}
-QToolButton {{
-  font: 700 14px 'Segoe UI';
-  color: #0F172A;
-  background: transparent;
-  border: 0;
-}}
+class DS_Light(DS):
+    name     = "light"
+    BG       = "#ffffff"
+    BG_SOFT  = "#f8fafc"
+    FRAME    = "#e5e7eb"
+    TEXT     = "#0f172a"
+    TEXT_MID = "#334155"
+    TEXT_DIM = "#64748b"
+    PRI      = "#2563eb"
+    OK       = "#16a34a"
+    WARN     = "#d97706"
+    ERR      = "#dc2626"
+    VIOLET   = "#7c3aed"
 
-/* -------- Inputs -------- */
-QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QDateEdit, QTimeEdit, QComboBox {{
-  background: {COLORS["inputBg"]};
-  color: #0f172a;
-  border: 1px solid #D6E4F5;
-  border-radius: 8px;
-  padding: 6px 10px;
-  selection-background-color: {COLORS["selBg"]};
-  selection-color: {COLORS["selFg"]};
-}}
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus, QDateEdit:focus, QTimeEdit:focus, QComboBox:focus {{
-  border: 1px solid {COLORS["primary"]};
-  box-shadow: 0 0 0 2px rgba(58,141,255,0.18);
-}}
+class DS_HC(DS):
+    name     = "high_contrast"
+    BG       = "#000000"
+    BG_SOFT  = "#0a0a0a"
+    FRAME    = "#2a2a2a"
+    TEXT     = "#ffffff"
+    TEXT_MID = "#e7e7e7"
+    TEXT_DIM = "#bdbdbd"
+    PRI      = "#00b7ff"
+    OK       = "#00ff7f"
+    WARN     = "#ffd000"
+    ERR      = "#ff4d4f"
+    VIOLET   = "#9d5cff"
 
-QComboBox::drop-down {{
-    border: none; width: 24px;
-}}
-QComboBox::down-arrow {{
-    width: 10px; height: 10px;
-}}
+def use(mode: str):
+    m = (mode or "dark").lower()
+    if m.startswith("light"): return DS_Light()
+    if m.startswith("high"):  return DS_HC()
+    return DS()
 
-/* -------- Buttons -------- */
-QPushButton {{
-  border-radius: 10px;
-  padding: 8px 14px;
-  font-weight: 600;
-  border: 1px solid transparent;
-  background: {COLORS["primary"]};
-  color: white;
-}}
-QPushButton:hover {{ filter: brightness(1.05); }}
-QPushButton:pressed {{ filter: brightness(0.95); }}
+def apply_clinic_theme(app: QtWidgets.QApplication, *, mode="dark", base_pt=11, rtl: bool=False, scale: float=1.0):
+    """
+    Apply a consistent clinic UI theme.
+    Fixes:
+      • TabBar text visibility (normal/hover/selected/disabled)
+      • Table zebra rows on dark themes (AlternateBase)
+      • Selection colors and gridlines
+    """
+    ds = use(mode)
+    QtWidgets.QApplication.setLayoutDirection(QtCore.Qt.RightToLeft if rtl else QtCore.Qt.LeftToRight)
+    app.setFont(QtGui.QFont(DS.FONT, base_pt))
 
-QPushButton[variant="ghost"] {{
-  background: rgba(255,255,255,0.85);
-  color: #0F172A;
-  border: 1px solid #D6E4F5;
-}}
-QPushButton[variant="ghost"]:hover {{ background: rgba(255,255,255,0.95); }}
-
-QPushButton[variant="info"]    {{ background: {COLORS["info"]};    color: white; }}
-QPushButton[variant="success"] {{ background: {COLORS["success"]}; color: white; }}
-
-/* -------- Tables -------- */
-QHeaderView::section {{
-  background: rgba(255,255,255,0.85);
-  color: #334155;
-  padding: 8px 10px;
-  border: 0; border-bottom: 1px solid {COLORS["stroke"]};
-  font-weight: 600;
-}}
-QTableWidget, QTableView {{
-  background: {COLORS["panelInner"]};
-  color: #0f172a;
-  border: 1px solid {COLORS["stroke"]};
-  border-radius: 10px;
-  gridline-color: #E8EEF7;
-  selection-background-color: {COLORS["selBg"]};
-  selection-color: {COLORS["selFg"]};
-}}
-QTableView::item:!selected:alternate {{
-  background: {COLORS["stripe"]};
-}}
-
-/* -------- Status / Tooltips -------- */
-QToolTip {{
-  background-color: rgba(255,255,255,0.98);
-  color: #0f172a;
-  border: 1px solid {COLORS["stroke"]};
-  border-radius: 8px;
-  padding: 6px 8px;
-}}
-
-/* -------- Scrollbars -------- */
-QScrollBar:vertical {{
-  background: transparent; width: 10px; margin: 4px;
-}}
-QScrollBar::handle:vertical {{
-  background: rgba(58,141,255,0.55); min-height: 28px; border-radius: 6px;
-}}
-QScrollBar:horizontal {{
-  background: transparent; height: 10px; margin: 4px;
-}}
-QScrollBar::handle:horizontal {{
-  background: rgba(58,141,255,0.55); min-width: 28px; border-radius: 6px;
-}}
-QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
-"""
-
-# ---------- Global Apply ----------
-def apply_global_theme(app: QtWidgets.QApplication, base_point_size: int = 11) -> None:
-    """Apply palette + QSS globally."""
-    app.setStyle("fusion")
-    pal = QtGui.QPalette()
-    pal.setColor(QtGui.QPalette.WindowText, QtGui.QColor(COLORS["text"]))
-    pal.setColor(QtGui.QPalette.ButtonText, QtGui.QColor(COLORS["text"]))
-    pal.setColor(QtGui.QPalette.Text, QtGui.QColor(COLORS["text"]))
-    pal.setColor(QtGui.QPalette.ToolTipBase, QtGui.QColor("#ffffff"))
-    pal.setColor(QtGui.QPalette.ToolTipText, QtGui.QColor("#0f172a"))
+    # ---- Palette (important for alternatingRowColors & defaults) ----
+    pal = app.palette()
+    pal.setColor(QtGui.QPalette.Window,       QtGui.QColor(ds.BG))
+    pal.setColor(QtGui.QPalette.Base,         QtGui.QColor(ds.BG_SOFT))
+    pal.setColor(QtGui.QPalette.AlternateBase,QtGui.QColor("#0e162b" if ds.name!="light" else "#eef2f7"))
+    pal.setColor(QtGui.QPalette.Text,         QtGui.QColor(ds.TEXT))
+    pal.setColor(QtGui.QPalette.ButtonText,   QtGui.QColor(ds.TEXT))
+    pal.setColor(QtGui.QPalette.Highlight,    QtGui.QColor(ds.PRI))
+    pal.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor("#ffffff"))
+    pal.setColor(QtGui.QPalette.ToolTipBase,  QtGui.QColor("#111827" if ds.name!="light" else "#ffffff"))
+    pal.setColor(QtGui.QPalette.ToolTipText,  QtGui.QColor("#e5e7eb" if ds.name!="light" else "#0f172a"))
     app.setPalette(pal)
 
-    f = app.font()
-    f.setPointSize(base_point_size)
-    app.setFont(f)
+    pad = int(DS.PAD * max(0.85, min(1.6, scale)))
+    radius = DS.RADIUS
+    alt = "#0e162b" if ds.name!="light" else "#eef2f7"
+    hdr = "#0b132a" if ds.name!="light" else "#f1f5f9"
 
-    app.setStyleSheet(GLOBAL_QSS)
+    # ---- Global QSS ----
+    app.setStyleSheet(f"""
+    QWidget {{ color:{ds.TEXT}; font-family:'{DS.FONT}'; background:{ds.BG}; }}
 
-# ---------- Windows Mica/Acrylic (optional) ----------
-def _is_windows() -> bool:
-    return platform.system().lower() == "windows"
+    QToolTip {{
+        background: {'#111827' if ds.name!='light' else '#ffffff'};
+        color: {'#e5e7eb' if ds.name!='light' else '#111827'};
+        border:1px solid {ds.FRAME}; padding:4px 8px; border-radius:6px;
+    }}
 
-if _is_windows():
-    import ctypes
-    from ctypes import wintypes
+    /* Surfaces */
+    QFrame[card="true"], QFrame[modernCard="true"] {{
+        background:{ds.BG}; border:1px solid {ds.FRAME}; border-radius:{radius}px;
+    }}
 
-    class ACCENT_POLICY(ctypes.Structure):
-        _fields_ = [("AccentState", ctypes.c_int),
-                    ("AccentFlags", ctypes.c_int),
-                    ("GradientColor", ctypes.c_uint32),
-                    ("AnimationId", ctypes.c_int)]
-    class WINDOWCOMPOSITIONATTRIBDATA(ctypes.Structure):
-        _fields_ = [("Attribute", ctypes.c_int),
-                    ("Data", ctypes.c_void_p),
-                    ("SizeOfData", ctypes.c_size_t)]
-    WCA_ACCENT_POLICY = 19
-    ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
-    DWMWA_SYSTEMBACKDROP_TYPE = 38
-    DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-    DWMSBT_MAINWINDOW = 2
+    /* DPI-safe group boxes */
+    QGroupBox {{
+        color:{ds.TEXT_MID}; border:1px solid {ds.FRAME}; border-radius:{radius - 2}px;
+        margin-top:{pad + 8}px; background:{ds.BG};
+    }}
+    QGroupBox::title {{
+        subcontrol-origin: margin; subcontrol-position: top left;
+        left:{pad - 2}px; top:0px; padding:0 6px; color:{ds.TEXT_MID}; background:{ds.BG}; font-weight:600;
+    }}
 
-    user32 = ctypes.windll.user32
-    dwmapi = ctypes.windll.dwmapi
+    /* Headings via role property (role=h1|h2|muted) */
+    QLabel[role="h1"] {{ font: 700 {int(base_pt*1.9)}pt '{DS.FONT}'; color:{ds.TEXT}; }}
+    QLabel[role="h2"] {{ font: 600 {int(base_pt*1.4)}pt '{DS.FONT}'; color:{ds.TEXT_MID}; }}
+    QLabel[role="muted"] {{ color:{ds.TEXT_DIM}; }}
 
-    def _argb(a, r, g, b) -> int:
-        return ((a & 0xFF) << 24) | ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF)
+    /* Inputs */
+    QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QDateEdit, QTimeEdit, QComboBox {{
+        background:{ds.BG_SOFT}; color:{ds.TEXT}; border:1px solid {ds.FRAME}; border-radius:8px; padding:6px 8px;
+    }}
+    QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus,
+    QDateEdit:focus, QTimeEdit:focus, QComboBox:focus {{
+        outline:none; border:1px solid {ds.PRI};
+    }}
+    QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QTextEdit:disabled,
+    QDateEdit:disabled, QTimeEdit:disabled, QComboBox:disabled {{
+        color:{ds.TEXT_DIM}; background: {'#0a0f1c' if ds.name!='light' else '#f1f5f9'};
+    }}
 
-    def _enable_acrylic(hwnd: int, opacity=0xCC, tint=(58,141,255)):
-        accent = ACCENT_POLICY()
-        accent.AccentState = ACCENT_ENABLE_ACRYLICBLURBEHIND
-        accent.AccentFlags = 0
-        accent.GradientColor = _argb(opacity, *tint)
-        data = WINDOWCOMPOSITIONATTRIBDATA()
-        data.Attribute = WCA_ACCENT_POLICY
-        data.Data = ctypes.cast(ctypes.pointer(accent), ctypes.c_void_p)
-        data.SizeOfData = ctypes.sizeof(accent)
-        user32.SetWindowCompositionAttribute(int(hwnd), ctypes.byref(data))
+    /* Buttons */
+    QPushButton {{
+        background:{ds.PRI}; color:white; border:none; border-radius:8px; padding:8px 14px; font-weight:600;
+    }}
+    QPushButton:hover {{ filter:brightness(1.06); }}
+    QPushButton:pressed {{ transform: translateY(1px); }}
+    QPushButton:disabled {{ background:{ds.FRAME}; color:{ds.TEXT_DIM}; }}
+    QPushButton[variant="ghost"] {{ background:{ds.BG_SOFT}; color:{ds.TEXT_MID}; border:1px solid {ds.FRAME}; }}
+    QPushButton[variant="success"] {{ background:{ds.OK}; }}
+    QPushButton[variant="warning"] {{ background:{ds.WARN}; }}
+    QPushButton[variant="danger"]  {{ background:{ds.ERR}; }}
+    QPushButton[variant="info"]    {{ background:{ds.PRI}; }}
 
-    def _enable_mica(hwnd: int, dark=None):
-        if dark is not None:
-            pv = ctypes.c_int(1 if dark else 0)
-            dwmapi.DwmSetWindowAttribute(int(hwnd), DWMWA_USE_IMMERSIVE_DARK_MODE, ctypes.byref(pv), ctypes.sizeof(pv))
-        mica = ctypes.c_int(DWMSBT_MAINWINDOW)
-        dwmapi.DwmSetWindowAttribute(int(hwnd), DWMWA_SYSTEMBACKDROP_TYPE, ctypes.byref(mica), ctypes.sizeof(mica))
+    /* Tables (explicit zebra & selection to avoid platform defaults) */
+    QTableWidget {{
+        background:{ds.BG_SOFT};
+        color:{ds.TEXT};
+        border:1px solid {ds.FRAME};
+        border-radius:8px;
+        alternate-background-color:{alt};
+        gridline-color:{ds.FRAME};
+        selection-background-color:{ds.PRI};
+        selection-color:white;
+    }}
+    QHeaderView::section {{
+        background:{hdr};
+        color:{ds.TEXT_MID};
+        padding:8px; border:none;
+    }}
+    QTableCornerButton::section {{ background:{ds.BG_SOFT}; border:1px solid {ds.FRAME}; }}
 
-def apply_window_backdrop(window: QtWidgets.QWidget, *, prefer_mica=True):
-    """Enable blur (Mica/Acrylic) on Windows; no-op elsewhere. Call after .show()."""
-    if not _is_windows(): return
-    try:
-        hwnd = int(window.winId())
-        if prefer_mica and sys.getwindowsversion().build >= 22000:
-            _enable_mica(hwnd)
-        else:
-            _enable_acrylic(hwnd)
-    except Exception as e:
-        print("Backdrop enable failed:", e)
+    /* Tabs – readable in all states */
+    QTabWidget::pane {{
+        border:1px solid {ds.FRAME};
+        border-radius:{radius - 2}px;
+        top:-1px; background:{ds.BG};
+    }}
+    QTabBar {{ background: transparent; }}
+    QTabBar::tab {{
+        background:{ds.BG_SOFT};
+        color:{ds.TEXT_MID};
+        border:1px solid {ds.FRAME};
+        padding:6px 12px;
+        margin-right:2px;
+        border-top-left-radius:8px; border-top-right-radius:8px;
+        min-height: 26px;
+    }}
+    QTabBar::tab:hover {{
+        color:{ds.TEXT};
+        background:{'#111827' if ds.name!='light' else '#eef2f7'};
+    }}
+    QTabBar::tab:selected {{
+        background:{ds.BG};
+        color:{ds.TEXT};
+        border-bottom-color: transparent;
+        font-weight:600;
+    }}
+    QTabBar::tab:disabled {{ color:{ds.TEXT_DIM}; }}
+
+    /* Menus/Checks/Scrollbars */
+    QMenu {{ background:{ds.BG}; color:{ds.TEXT}; border:1px solid {ds.FRAME}; border-radius:8px; }}
+    QMenu::item:selected {{ background:{ds.BG_SOFT}; }}
+    QCheckBox, QRadioButton {{ color:{ds.TEXT}; }}
+    QCheckBox::indicator, QRadioButton::indicator {{
+        width:16px; height:16px; border:1px solid {ds.FRAME}; border-radius:3px; background:{ds.BG_SOFT};
+    }}
+    QCheckBox::indicator:checked {{ image:none; background:{ds.PRI}; border-color:{ds.PRI}; }}
+
+    QScrollBar:vertical {{ background:transparent; width:10px; margin:2px; }}
+    QScrollBar::handle:vertical {{ background:{ds.FRAME}; border-radius:5px; min-height:24px; }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0px; }}
+    """)
+
+def apply_table_palette(table: QtWidgets.QTableWidget, *, dark=True):
+    """
+    Optional helper if you need to enforce palette on a specific table at runtime.
+    Not required if you applied the global theme before creating widgets.
+    """
+    pal = table.palette()
+    pal.setColor(QtGui.QPalette.Base,           QtGui.QColor("#0b1020" if dark else "#ffffff"))
+    pal.setColor(QtGui.QPalette.AlternateBase,  QtGui.QColor("#0e162b" if dark else "#eef2f7"))
+    pal.setColor(QtGui.QPalette.Text,           QtGui.QColor("#e5e7eb" if dark else "#0f172a"))
+    pal.setColor(QtGui.QPalette.Highlight,      QtGui.QColor("#0ea5e9"))
+    pal.setColor(QtGui.QPalette.HighlightedText,QtGui.QColor("#ffffff"))
+    table.setPalette(pal)
