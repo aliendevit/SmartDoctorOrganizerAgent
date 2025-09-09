@@ -1,14 +1,5 @@
-# dashboard_tab.py
-# Practice Dashboard (clinic-friendly, senior touches)
-# - Resilient data import: falls back if data.data missing
-# - Presets (7/30/90/365) + spin; persists last selection per session
-# - KPI tiles, outstanding table with search + min filter, numeric sorting & alignment
-# - Archive (upsert) to ./json/monthly_receipts_archive.json with an "Open Folder" button
-# - Export to CSV (context menu / Ctrl+E), Copy row (Ctrl+C)
-# - Keyboard shortcuts: Refresh (F5), Export (Ctrl+E)
-# - Empty-state messages & defensive parsing
-# - Theme-friendly: no hard-coded weird colors; uses modernCard and accents only
-# - No external deps (only PyQt5 + stdlib)
+# dashboard_tab.py — Glass-matched Practice Dashboard
+# (keeps original behavior; only styling and small UI polish changed)
 
 import csv
 import json
@@ -18,27 +9,35 @@ from typing import List, Dict
 from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtCore import QDate
 
+# ---- Global design tokens (safe fallback) -----------------------------------
+try:
+    from UI.design_system import COLORS as DS_COLORS
+except Exception:
+    DS_COLORS = {
+        "text": "#1f2937", "textDim": "#334155", "muted": "#64748b",
+        "primary": "#3A8DFF", "info": "#2CBBA6", "success": "#7A77FF",
+        "stroke": "#E5EFFA", "panel": "rgba(255,255,255,0.55)",
+        "panelInner": "rgba(255,255,255,0.65)", "inputBg": "rgba(255,255,255,0.88)",
+        "stripe": "rgba(240,247,255,0.65)", "selBg": "#3A8DFF", "selFg": "#ffffff",
+    }
+
 # ---- Robust data access ------------------------------------------------------
 def _load_all_clients_safe() -> List[Dict]:
-    """Try load_all_clients(); return [] on failure."""
     try:
         from data.data import load_all_clients
         return load_all_clients() or []
     except Exception:
         return []
 
-# ---- Archive path (relative to this file) -----------------------------------
+# ---- Archive path ------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ARCHIVE_FILE = os.path.normpath(os.path.join(BASE_DIR, "..", "json", "monthly_receipts_archive.json"))
 
 # ---- Small helpers -----------------------------------------------------------
 def _polish(*widgets):
-    """Re-apply QSS after changing dynamic properties."""
     for w in widgets:
         try:
-            w.style().unpolish(w)
-            w.style().polish(w)
-            w.update()
+            w.style().unpolish(w); w.style().polish(w); w.update()
         except Exception:
             pass
 
@@ -51,8 +50,7 @@ def _tr(text: str) -> str:
 
 def _to_float(v) -> float:
     try:
-        if v is None:
-            return 0.0
+        if v is None: return 0.0
         s = str(v).strip().replace(",", "")
         return float(s) if s else 0.0
     except Exception:
@@ -63,11 +61,12 @@ def _ensure_archive_dir():
 
 # -----------------------------------------------------------------------------
 
+
 class DashboardTab(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._all_clients_cache: List[Dict] = []
-        self._outstanding_cache: List[Dict] = []     # raw list for filtering
+        self._outstanding_cache: List[Dict] = []
         self._session_settings = QtCore.QSettings("YourOrg", "MedicalDocAI Demo v1.9.3")
 
         self._build_ui()
@@ -82,18 +81,16 @@ class DashboardTab(QtWidgets.QWidget):
         root.setSpacing(12)
 
         # ===== Header (title + presets + days spin + refresh) =====
-        header_card = QtWidgets.QFrame()
-        header_card.setProperty("modernCard", True)
+        header_card = QtWidgets.QFrame(); header_card.setProperty("modernCard", True)
         h = QtWidgets.QHBoxLayout(header_card)
-        h.setContentsMargins(12, 12, 12, 12)
-        h.setSpacing(10)
+        h.setContentsMargins(12, 12, 12, 12); h.setSpacing(10)
 
         self.title = QtWidgets.QLabel(_tr("Practice Dashboard"))
-        self.title.setStyleSheet("font-size: 18px; font-weight: 700;")
+        self.title.setStyleSheet("font: 700 20px 'Segoe UI';")
         h.addWidget(self.title)
         h.addStretch(1)
 
-        # presets
+        # presets – ghost style with subtle check state
         self.btn_7d   = QtWidgets.QPushButton(_tr("7d"))
         self.btn_30d  = QtWidgets.QPushButton(_tr("30d"))
         self.btn_90d  = QtWidgets.QPushButton(_tr("90d"))
@@ -101,6 +98,7 @@ class DashboardTab(QtWidgets.QWidget):
         for b in (self.btn_7d, self.btn_30d, self.btn_90d, self.btn_365d):
             b.setProperty("accent", "slate")
             b.setCheckable(True)
+            h.addWidget(b)
         self.btn_30d.setChecked(True)
         _polish(self.btn_7d, self.btn_30d, self.btn_90d, self.btn_365d)
 
@@ -108,9 +106,6 @@ class DashboardTab(QtWidgets.QWidget):
         for b in (self.btn_7d, self.btn_30d, self.btn_90d, self.btn_365d):
             self._preset_group.addButton(b)
         self._preset_group.buttonClicked.connect(self._apply_preset_days)
-
-        for b in (self.btn_7d, self.btn_30d, self.btn_90d, self.btn_365d):
-            h.addWidget(b)
 
         self.period_label = QtWidgets.QLabel(_tr("Days:"))
         self.inventory_days_spinbox = QtWidgets.QSpinBox()
@@ -129,44 +124,34 @@ class DashboardTab(QtWidgets.QWidget):
         root.addWidget(header_card)
 
         # ===== Splitter: Left (KPIs & Summary) | Right (Tables) =====
-        split = QtWidgets.QSplitter()
-        split.setOrientation(QtCore.Qt.Horizontal)
+        split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         root.addWidget(split, 1)
 
         # ----- LEFT COLUMN -----
         left = QtWidgets.QWidget()
-        l = QtWidgets.QVBoxLayout(left)
-        l.setContentsMargins(0, 0, 0, 0)
-        l.setSpacing(12)
+        l = QtWidgets.QVBoxLayout(left); l.setContentsMargins(0, 0, 0, 0); l.setSpacing(12)
 
-        # KPI tiles (2x2)
-        kpi_card = QtWidgets.QFrame()
-        kpi_card.setProperty("modernCard", True)
+        # KPI tiles grid (2x2) - glassy cards with accent strip
+        kpi_card = QtWidgets.QFrame(); kpi_card.setProperty("modernCard", True)
         kg = QtWidgets.QGridLayout(kpi_card)
-        kg.setContentsMargins(12, 12, 12, 12)
-        kg.setHorizontalSpacing(10)
-        kg.setVerticalSpacing(10)
+        kg.setContentsMargins(12, 12, 12, 12); kg.setHorizontalSpacing(10); kg.setVerticalSpacing(10)
 
-        def _make_kpi(title_text):
+        def _make_kpi(title_text: str, accent: str):
             box = QtWidgets.QFrame()
-            box.setProperty("modernCard", True)
-            vb = QtWidgets.QVBoxLayout(box)
-            vb.setContentsMargins(10, 10, 10, 10)
-            vb.setSpacing(6)
-            value = QtWidgets.QLabel("—")
+            box.setProperty("kpiCard", True)
+            box.setProperty("accent", accent)
+            vb = QtWidgets.QVBoxLayout(box); vb.setContentsMargins(10, 10, 10, 10); vb.setSpacing(6)
+            value = QtWidgets.QLabel("—"); value.setObjectName("KpiValue")
             value.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-            value.setStyleSheet("font-size: 22px; font-weight: 700;")
-            title = QtWidgets.QLabel(title_text)
+            title = QtWidgets.QLabel(title_text); title.setObjectName("KpiCaption")
             title.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-            title.setStyleSheet("font-size: 12px; font-weight: 600;")
-            vb.addWidget(value)
-            vb.addWidget(title)
+            vb.addWidget(value); vb.addWidget(title)
             return box, value
 
-        self.kpi_total_clients_card,    self.kpi_total_clients_value    = _make_kpi(_tr("Total Clients"))
-        self.kpi_total_revenue_card,    self.kpi_total_revenue_value    = _make_kpi(_tr("Total Revenue"))
-        self.kpi_total_outstanding_card,self.kpi_total_outstanding_value= _make_kpi(_tr("Total Outstanding"))
-        self.kpi_unpaid_clients_card,   self.kpi_unpaid_clients_value   = _make_kpi(_tr("Unpaid Clients"))
+        self.kpi_total_clients_card,     self.kpi_total_clients_value     = _make_kpi(_tr("Total Clients"),     "primary")
+        self.kpi_total_revenue_card,     self.kpi_total_revenue_value     = _make_kpi(_tr("Total Revenue"),     "teal")
+        self.kpi_total_outstanding_card, self.kpi_total_outstanding_value = _make_kpi(_tr("Total Outstanding"), "warning")
+        self.kpi_unpaid_clients_card,    self.kpi_unpaid_clients_value    = _make_kpi(_tr("Unpaid Clients"),    "danger")
 
         kg.addWidget(self.kpi_total_clients_card,     0, 0)
         kg.addWidget(self.kpi_total_revenue_card,     0, 1)
@@ -175,11 +160,8 @@ class DashboardTab(QtWidgets.QWidget):
         l.addWidget(kpi_card)
 
         # Inventory / Period summary
-        inv_card = QtWidgets.QFrame()
-        inv_card.setProperty("modernCard", True)
-        ily = QtWidgets.QVBoxLayout(inv_card)
-        ily.setContentsMargins(12, 12, 12, 12)
-        ily.setSpacing(8)
+        inv_card = QtWidgets.QFrame(); inv_card.setProperty("modernCard", True)
+        ily = QtWidgets.QVBoxLayout(inv_card); ily.setContentsMargins(12, 12, 12, 12); ily.setSpacing(8)
 
         self.inventory_title = QtWidgets.QLabel(_tr("Inventory Summary"))
         self.inventory_title.setStyleSheet("font-weight: 700;")
@@ -189,8 +171,7 @@ class DashboardTab(QtWidgets.QWidget):
         self.current_inventory_label.setStyleSheet("font-weight: 600;")
         ily.addWidget(self.current_inventory_label)
 
-        il_actions = QtWidgets.QHBoxLayout()
-        il_actions.setSpacing(8)
+        il_actions = QtWidgets.QHBoxLayout(); il_actions.setSpacing(8)
 
         self.show_unpaid_btn = QtWidgets.QPushButton(_tr("Show Unpaid Clients"))
         self.show_unpaid_btn.setProperty("variant", "danger")
@@ -212,32 +193,23 @@ class DashboardTab(QtWidgets.QWidget):
 
         # ----- RIGHT COLUMN -----
         right = QtWidgets.QWidget()
-        r = QtWidgets.QVBoxLayout(right)
-        r.setContentsMargins(0, 0, 0, 0)
-        r.setSpacing(12)
+        r = QtWidgets.QVBoxLayout(right); r.setContentsMargins(0, 0, 0, 0); r.setSpacing(12)
 
         # Outstanding card with search/filter + table
-        out_card = QtWidgets.QFrame()
-        out_card.setProperty("modernCard", True)
-        og = QtWidgets.QVBoxLayout(out_card)
-        og.setContentsMargins(12, 12, 12, 12)
-        og.setSpacing(8)
+        out_card = QtWidgets.QFrame(); out_card.setProperty("modernCard", True)
+        og = QtWidgets.QVBoxLayout(out_card); og.setContentsMargins(12, 12, 12, 12); og.setSpacing(8)
 
-        out_top = QtWidgets.QHBoxLayout()
-        out_top.setSpacing(8)
+        out_top = QtWidgets.QHBoxLayout(); out_top.setSpacing(8)
         out_title = QtWidgets.QLabel(_tr("Outstanding Payments"))
         out_title.setStyleSheet("font-weight: 700;")
-        out_top.addWidget(out_title)
-        out_top.addStretch(1)
+        out_top.addWidget(out_title); out_top.addStretch(1)
 
-        self.search_line = QtWidgets.QLineEdit()
-        self.search_line.setPlaceholderText(_tr("Search by name…"))
+        self.search_line = QtWidgets.QLineEdit(); self.search_line.setPlaceholderText(_tr("Search by name…"))
         self.search_line.textChanged.connect(self._apply_outstanding_filters)
         out_top.addWidget(self.search_line)
 
         self.min_out_spin = QtWidgets.QDoubleSpinBox()
-        self.min_out_spin.setRange(0.0, 10_000_000.0)
-        self.min_out_spin.setDecimals(2)
+        self.min_out_spin.setRange(0.0, 10_000_000.0); self.min_out_spin.setDecimals(2)
         self.min_out_spin.setPrefix(_tr("Min: "))
         self.min_out_spin.valueChanged.connect(self._apply_outstanding_filters)
         out_top.addWidget(self.min_out_spin)
@@ -266,25 +238,18 @@ class DashboardTab(QtWidgets.QWidget):
         self.outstanding_table.setEditTriggers(QtWidgets.QTableWidget.NoEditTriggers)
         self.outstanding_table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.outstanding_table.customContextMenuRequested.connect(self._menu_outstanding)
-
-        # enable sorting; we’ll provide numeric comparisons by storing numeric data in UserRole
         self.outstanding_table.setSortingEnabled(True)
-        og.addWidget(self.outstanding_table, 1)
+        og.addWidget(self.outstanding_table, 2)
         r.addWidget(out_card, 2)
 
         # Archive card (history)
-        arch_card = QtWidgets.QFrame()
-        arch_card.setProperty("modernCard", True)
-        ag = QtWidgets.QVBoxLayout(arch_card)
-        ag.setContentsMargins(12, 12, 12, 12)
-        ag.setSpacing(8)
+        arch_card = QtWidgets.QFrame(); arch_card.setProperty("modernCard", True)
+        ag = QtWidgets.QVBoxLayout(arch_card); ag.setContentsMargins(12, 12, 12, 12); ag.setSpacing(8)
 
-        arch_top = QtWidgets.QHBoxLayout()
-        arch_top.setSpacing(8)
+        arch_top = QtWidgets.QHBoxLayout(); arch_top.setSpacing(8)
         arch_title = QtWidgets.QLabel(_tr("Archived Inventory"))
         arch_title.setStyleSheet("font-weight: 700;")
-        arch_top.addWidget(arch_title)
-        arch_top.addStretch(1)
+        arch_top.addWidget(arch_title); arch_top.addStretch(1)
 
         self.btn_open_archive = QtWidgets.QPushButton(_tr("Open Archive Folder"))
         self.btn_open_archive.setProperty("accent", "sky")
@@ -313,32 +278,112 @@ class DashboardTab(QtWidgets.QWidget):
         split.setStretchFactor(0, 1)
         split.setStretchFactor(1, 2)
 
-        # ---- Style (compatible with your dark theme) ----
-        self.setStyleSheet("""
-        QFrame[modernCard="true"] { background:#0f172a; border:1px solid #1f2937; border-radius:12px; }
-        QLabel, QTableWidget, QLineEdit, QComboBox, QPushButton { color:#e5e7eb; }
-        QLineEdit, QComboBox {
-            background:#0b1020; border:1px solid #1f2937; border-radius:8px; padding:6px 8px;
-        }
-        QHeaderView::section { background:#0b132a; color:#cbd5e1; padding:8px; border:none; }
-        QTableWidget { background:#0b1020; border:1px solid #1f2937; border-radius:10px; }
-        QPushButton { background:#0ea5e9; border:none; border-radius:8px; padding:8px 14px; font-weight:600; }
-        QPushButton[variant="danger"] { background:#ef4444; }
-        QPushButton[variant="warning"] { background:#f59e0b; }
-        QPushButton[accent="violet"] { /* color kept by theme */ }
-        QPushButton[accent="slate"]  { /* ghost-ish by theme */ }
-        QPushButton[accent="sky"]    { /* sky by theme */ }
-        """)
+        # ---- Apply glass-matched QSS for THIS TAB ----
+        self.setStyleSheet(self._tab_qss())
 
         # ---- Shortcuts ----
         QtWidgets.QShortcut(QtGui.QKeySequence("F5"),     self, activated=self.refresh_data)
         QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+E"), self, activated=self._export_outstanding_csv)
         QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+C"), self, activated=self._copy_selected_row)
 
+    # ---------------- Tab QSS ----------------
+    def _tab_qss(self) -> str:
+        p = DS_COLORS
+        return f"""
+        QWidget {{ color: {p['text']}; font-family:'Segoe UI', Arial; font-size:14px; }}
+
+        /* Cards */
+        QFrame[modernCard="true"] {{
+            background: {p['panel']};
+            border: 1px solid rgba(255,255,255,0.45);
+            border-radius: 12px;
+        }}
+
+        /* KPI tiles (accented left border) */
+        QFrame[kpiCard="true"] {{
+            background: {p['panelInner']};
+            border: 1px solid {p['stroke']};
+            border-radius: 12px;
+            padding: 10px;
+        }}
+        QFrame[kpiCard="true"][accent="primary"] {{ border-left: 6px solid {p['primary']}; }}
+        QFrame[kpiCard="true"][accent="teal"]    {{ border-left: 6px solid {p['info']};    }}
+        QFrame[kpiCard="true"][accent="purple"]  {{ border-left: 6px solid {p['success']}; }}
+        QFrame[kpiCard="true"][accent="danger"]  {{ border-left: 6px solid #ff6b6b;       }}
+        QFrame[kpiCard="true"][accent="warning"] {{ border-left: 6px solid #f59e0b;       }}
+
+        QLabel#KpiValue   {{ color:#0f172a; font:700 22px 'Segoe UI'; }}
+        QLabel#KpiCaption {{ color:{p['muted']}; font:600 12px 'Segoe UI'; }}
+
+        /* Inputs */
+        QLineEdit, QSpinBox, QDoubleSpinBox {{
+            background: {p['inputBg']};
+            color:#0f172a;
+            border:1px solid #D6E4F5;
+            border-radius:8px;
+            padding:6px 10px;
+            selection-background-color:{p['selBg']};
+            selection-color:{p['selFg']};
+        }}
+        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
+            border: 1px solid {p['primary']};
+            box-shadow: 0 0 0 2px rgba(58,141,255,0.18);
+        }}
+
+        /* Buttons */
+        QPushButton {{
+            border-radius:10px; padding:8px 14px; font-weight:600;
+            border:1px solid transparent; background:{p['primary']}; color:white;
+        }}
+        QPushButton:hover {{ filter:brightness(1.05); }}
+        QPushButton:pressed {{ filter:brightness(0.95); }}
+
+        /* ghost-ish accent for presets */
+        QPushButton[accent="slate"] {{
+            background: rgba(255,255,255,0.85); color:#0F172A; border:1px solid #D6E4F5;
+        }}
+        QPushButton[accent="slate"]:hover {{ background: rgba(255,255,255,0.95); }}
+        QPushButton[accent="slate"]:checked {{
+            border:1px solid {p['primary']};
+            box-shadow:0 0 0 2px rgba(58,141,255,0.18);
+        }}
+
+        QPushButton[accent="violet"] {{ background:{p['success']}; color:white; }}
+        QPushButton[accent="sky"]    {{ background:{p['primary']}; color:white; }}
+
+        QPushButton[variant="danger"]  {{ background:#ef4444; color:white; }}
+        QPushButton[variant="warning"] {{ background:#f59e0b; color:white; }}
+
+        /* Tables */
+        QHeaderView::section {{
+            background: rgba(255,255,255,0.85);
+            color:#334155;
+            padding:8px 10px;
+            border:0; border-bottom:1px solid {p['stroke']};
+            font-weight:600;
+        }}
+        QTableWidget, QTableView {{
+            background:{p['panelInner']};
+            color:#0f172a;
+            border:1px solid {p['stroke']};
+            border-radius:10px;
+            gridline-color:#E8EEF7;
+            selection-background-color:{p['selBg']};
+            selection-color:{p['selFg']};
+        }}
+        QTableView::item:!selected:alternate {{ background:{p['stripe']}; }}
+
+        /* Scrollbars */
+        QScrollBar:vertical {{ background:transparent; width:10px; margin:4px; }}
+        QScrollBar::handle:vertical {{ background:rgba(58,141,255,0.55); min-height:28px; border-radius:6px; }}
+        QScrollBar:horizontal {{ background:transparent; height:10px; margin:4px; }}
+        QScrollBar::handle:horizontal {{ background:rgba(58,141,255,0.55); min-width:28px; border-radius:6px; }}
+        QScrollBar::add-line, QScrollBar::sub-line {{ width:0; height:0; }}
+        """
+
     # ---------------- Data / Logic ----------------
     def _on_days_changed(self, val: int):
-        self._persist_period(val)
-        self.refresh_data()
+        self._persist_period(val); self.refresh_data()
 
     def _apply_preset_days(self, btn: QtWidgets.QAbstractButton):
         text = btn.text().lower()
@@ -359,7 +404,6 @@ class DashboardTab(QtWidgets.QWidget):
         except Exception:
             days = 30
         self.inventory_days_spinbox.setValue(days)
-        # select matching preset if exists
         mapping = {7: self.btn_7d, 30: self.btn_30d, 90: self.btn_90d, 365: self.btn_365d}
         if days in mapping:
             mapping[days].setChecked(True)
@@ -371,7 +415,7 @@ class DashboardTab(QtWidgets.QWidget):
         clients = _load_all_clients_safe()
         self._all_clients_cache = list(clients)
 
-        # --- Outstanding list (overall) ---
+        # Outstanding (overall)
         outstanding_clients = []
         for client in clients:
             total_amount = _to_float(client.get("Total Amount", 0))
@@ -386,7 +430,7 @@ class DashboardTab(QtWidgets.QWidget):
         self._outstanding_cache = outstanding_clients
         self._apply_outstanding_filters()
 
-        # --- Period summary ---
+        # Period summary
         days = int(self.inventory_days_spinbox.value())
         end_date = QDate.currentDate()
         start_date = end_date.addDays(-days)
@@ -411,7 +455,7 @@ class DashboardTab(QtWidgets.QWidget):
             f"{_tr('Unpaid Clients:')} {num_unpaid_period}"
         )
 
-        # --- KPI (overall) ---
+        # Overall KPIs
         total_clients = len(clients)
         total_revenue = 0.0
         total_outstanding_all = 0.0
@@ -425,12 +469,7 @@ class DashboardTab(QtWidgets.QWidget):
                 total_outstanding_all += (ta - tp)
                 total_unpaid += 1
 
-        self._update_kpis(
-            total_clients=total_clients,
-            total_revenue=total_revenue,
-            total_outstanding=total_outstanding_all,
-            unpaid_clients=total_unpaid
-        )
+        self._update_kpis(total_clients, total_revenue, total_outstanding_all, total_unpaid)
 
     def _update_kpis(self, total_clients: int, total_revenue: float, total_outstanding: float, unpaid_clients: int):
         self.kpi_total_clients_value.setText(f"{total_clients:,}")
@@ -441,17 +480,11 @@ class DashboardTab(QtWidgets.QWidget):
     def _apply_outstanding_filters(self):
         query = (self.search_line.text() or "").strip().lower()
         min_out = float(self.min_out_spin.value())
-        data = []
-        total_out = 0.0
-
+        data, total_out = [], 0.0
         for item in self._outstanding_cache:
-            if query and query not in (item["Name"] or "").lower():
-                continue
-            if item["Outstanding"] < min_out:
-                continue
-            data.append(item)
-            total_out += item["Outstanding"]
-
+            if query and query not in (item["Name"] or "").lower(): continue
+            if item["Outstanding"] < min_out: continue
+            data.append(item); total_out += item["Outstanding"]
         self.outstanding_label.setText(
             f"{_tr('Patients with outstanding payments:')} {len(data)} | "
             f"{_tr('Total Outstanding:')} {total_out:,.2f}"
@@ -461,28 +494,19 @@ class DashboardTab(QtWidgets.QWidget):
     def _populate_outstanding_table(self, data: List[Dict]):
         self.archive_table.clearSelection()
         self.outstanding_table.setRowCount(0)
-
-        # highest outstanding first (also enables header sort)
         for row, item in enumerate(sorted(data, key=lambda x: x["Outstanding"], reverse=True)):
             self.outstanding_table.insertRow(row)
-
-            # Name (left)
             it_name = QtWidgets.QTableWidgetItem(item["Name"])
             it_name.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
-
-            # Numbers (right-aligned) + store numeric for sorting (UserRole)
             def _num_item(val: float):
                 it = QtWidgets.QTableWidgetItem(f"{val:,.2f}")
                 it.setData(QtCore.Qt.UserRole, float(val))
                 it.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
                 return it
-
             self.outstanding_table.setItem(row, 0, it_name)
             self.outstanding_table.setItem(row, 1, _num_item(item["Total Amount"]))
             self.outstanding_table.setItem(row, 2, _num_item(item["Total Paid"]))
             self.outstanding_table.setItem(row, 3, _num_item(item["Outstanding"]))
-
-        # Custom sort using UserRole when header clicked
         self.outstanding_table.sortItems(3, QtCore.Qt.DescendingOrder)
 
     # ---------------- Actions ----------------
@@ -516,12 +540,10 @@ class DashboardTab(QtWidgets.QWidget):
         end_date = QDate.currentDate()
         start_date = end_date.addDays(-days)
         period_label = f"{start_date.toString('dd-MM-yyyy')} {_tr('to')} {end_date.toString('dd-MM-yyyy')}"
-
         clients = self._all_clients_cache or _load_all_clients_safe()
         total_paid_period = 0.0
         total_outstanding_period = 0.0
         num_unpaid_period = 0
-
         for client in clients:
             date_obj = QDate.fromString(client.get("Date", ""), "dd-MM-yyyy")
             if date_obj.isValid() and start_date <= date_obj <= end_date:
@@ -531,14 +553,12 @@ class DashboardTab(QtWidgets.QWidget):
                 if tp < ta:
                     total_outstanding_period += (ta - tp)
                     num_unpaid_period += 1
-
         period_summary = {
             "period": period_label,
             "total_receipts": total_paid_period,
             "total_outstanding": total_outstanding_period,
             "unpaid_clients": num_unpaid_period
         }
-
         archive = []
         if os.path.exists(ARCHIVE_FILE):
             try:
@@ -546,25 +566,16 @@ class DashboardTab(QtWidgets.QWidget):
                     archive = json.load(f)
             except Exception:
                 archive = []
-
-        # upsert by period label
         updated = False
         for entry in archive:
             if entry.get("period") == period_label:
-                entry.update(period_summary)
-                updated = True
-                break
-        if not updated:
-            archive.append(period_summary)
-
+                entry.update(period_summary); updated = True; break
+        if not updated: archive.append(period_summary)
         with open(ARCHIVE_FILE, "w", encoding="utf-8") as f:
             json.dump(archive, f, indent=4, ensure_ascii=False)
-
         self.load_archive()
-        QtWidgets.QMessageBox.information(
-            self, _tr("Archive"),
-            _tr("Summary for ") + period_label + _tr(" archived successfully.")
-        )
+        QtWidgets.QMessageBox.information(self, _tr("Archive"),
+                                          _tr("Summary for ") + period_label + _tr(" archived successfully."))
 
     def load_archive(self):
         archive = []
@@ -574,34 +585,27 @@ class DashboardTab(QtWidgets.QWidget):
                     archive = json.load(f)
             except Exception:
                 archive = []
-
         self.archive_table.setRowCount(0)
         for row, entry in enumerate(archive):
             self.archive_table.insertRow(row)
-
             period = entry.get("period", "")
             receipts = _to_float(entry.get("total_receipts", 0))
             outstanding = _to_float(entry.get("total_outstanding", 0))
             unpaid = int(entry.get("unpaid_clients", 0) or 0)
-
             it_period = QtWidgets.QTableWidgetItem(period)
             it_period.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
-
             def _num(val: float):
                 it = QtWidgets.QTableWidgetItem(f"{val:,.2f}")
                 it.setData(QtCore.Qt.UserRole, float(val))
                 it.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
                 return it
-
             it_unpaid = QtWidgets.QTableWidgetItem(str(unpaid))
             it_unpaid.setData(QtCore.Qt.UserRole, int(unpaid))
             it_unpaid.setTextAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
-
             self.archive_table.setItem(row, 0, it_period)
             self.archive_table.setItem(row, 1, _num(receipts))
             self.archive_table.setItem(row, 2, _num(outstanding))
             self.archive_table.setItem(row, 3, it_unpaid)
-
         self.archive_table.sortItems(0, QtCore.Qt.DescendingOrder)
 
     def _open_archive_folder(self):
@@ -641,7 +645,6 @@ class DashboardTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.information(self, _tr("Copy"), _tr("Select a row first."))
             return
         QtWidgets.QApplication.clipboard().setText("\t".join(vals))
-        # subtle toast via status label
         self.outstanding_label.setText(_tr("Copied selected row to clipboard."))
 
     def _export_outstanding_csv(self):
@@ -651,7 +654,8 @@ class DashboardTab(QtWidgets.QWidget):
         try:
             with open(path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
-                headers = [self.outstanding_table.horizontalHeaderItem(i).text() for i in range(self.outstanding_table.columnCount())]
+                headers = [self.outstanding_table.horizontalHeaderItem(i).text()
+                           for i in range(self.outstanding_table.columnCount())]
                 w.writerow(headers)
                 for r in range(self.outstanding_table.rowCount()):
                     row_vals = []
@@ -687,16 +691,22 @@ class DashboardTab(QtWidgets.QWidget):
             _tr("Period"), _tr("Total Receipts"), _tr("Total Outstanding"), _tr("Unpaid Clients")
         ])
 
+
 # ---- standalone run ----
 if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
     try:
-        from UI.modern_theme import ModernTheme
-        ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
+        from UI.design_system import apply_global_theme, apply_window_backdrop
+        apply_global_theme(app, base_point_size=11)
     except Exception:
         pass
     w = DashboardTab()
     w.resize(1100, 760)
     w.show()
+    try:
+        from UI.design_system import apply_window_backdrop
+        apply_window_backdrop(w, prefer_mica=True)
+    except Exception:
+        pass
     sys.exit(app.exec_())

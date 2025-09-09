@@ -1,19 +1,22 @@
-# appointment_tab.py
-# Clinician-friendly Appointments tab (senior pass).
-# - Clean, organized dark UI (matches Extraction tab look)
-# - Data pipeline via data.data with safe fallbacks (so tab still works)
-# - Quick filters: search, status, time scope (today/±7d/all)
-# - Inline "Remind" checkbox with proper save
-# - Status chip delegate (Scheduled/Completed/Canceled/No Show)
-# - Add/Edit dialog (warns if time in the past)
-# - Context menu, bulk actions, CSV export
-# - Tray notifications (if main passes tray_icon)
-# - Column widths persist via QSettings
+# appointment_tab.py — Glass-matched Appointments (senior pass)
 
 from PyQt5 import QtWidgets, QtCore, QtGui
 from datetime import datetime
 import csv
 import os
+
+# -------- design tokens (safe fallback) --------
+try:
+    from UI.design_system import COLORS as DS_COLORS
+except Exception:
+    DS_COLORS = {
+        "text": "#1f2937", "textDim": "#334155", "muted": "#64748b",
+        "primary": "#3A8DFF", "info": "#2CBBA6", "success": "#7A77FF",
+        "danger": "#EF4444", "warning": "#F59E0B",
+        "stroke": "#E5EFFA", "panel": "rgba(255,255,255,0.55)",
+        "panelInner": "rgba(255,255,255,0.65)", "inputBg": "rgba(255,255,255,0.88)",
+        "stripe": "rgba(240,247,255,0.65)", "selBg": "#3A8DFF", "selFg": "#ffffff",
+    }
 
 # -------- data backend (safe fallbacks) --------
 try:
@@ -23,7 +26,6 @@ except Exception:
     def load_appointments():
         return list(_STORE)
     def append_appointment(ap):
-        # add or replace by (Name + Date + Time)
         key = (ap.get("Name",""), ap.get("Appointment Date",""), ap.get("Appointment Time",""))
         idx = next((i for i,a in enumerate(_STORE) if (a.get("Name",""),a.get("Appointment Date",""),a.get("Appointment Time",""))==key), -1)
         if idx >= 0: _STORE[idx] = dict(ap)
@@ -69,23 +71,23 @@ def _boolish(val) -> bool:
 class StatusChipDelegate(QtWidgets.QStyledItemDelegate):
     """Paints status as a rounded chip (keeps selection highlight underneath)."""
     COLORS = {
-        "Scheduled": ("#0ea5e9", "#0b3550"),  # fg, soft bg tuned for dark
-        "Completed": ("#22c55e", "#0f3b24"),
-        "Canceled":  ("#ef4444", "#441414"),
-        "No Show":   ("#f59e0b", "#3f2d0a"),
+        "Scheduled": ("#0b5394", "rgba(11,83,148,0.14)"),   # deep blue fg, soft bg
+        "Completed": ("#166534", "rgba(22,101,52,0.14)"),
+        "Canceled":  ("#b91c1c", "rgba(185,28,28,0.14)"),
+        "No Show":   ("#92400e", "rgba(146,64,14,0.14)"),
     }
     def paint(self, painter, option, index):
         status = (index.data() or "").strip()
         if not status:
             return super().paint(painter, option, index)
 
-        # Selection underlay
+        # Selection underlay to keep platform highlight behavior
         if option.state & QtWidgets.QStyle.State_Selected:
             painter.save()
             painter.fillRect(option.rect, option.palette.highlight())
             painter.restore()
 
-        fg, bg = self.COLORS.get(status, ("#94a3b8", "#1f2937"))
+        fg, bg = self.COLORS.get(status, (DS_COLORS["textDim"], "rgba(0,0,0,0.08)"))
         painter.save()
         r = option.rect.adjusted(6, 6, -6, -6)
         path = QtGui.QPainterPath()
@@ -105,8 +107,7 @@ class StatusChipDelegate(QtWidgets.QStyledItemDelegate):
 class CheckBoxDelegate(QtWidgets.QStyledItemDelegate):
     """Inline editor/painter for 'Remind' column."""
     def createEditor(self, parent, option, index):
-        cb = QtWidgets.QCheckBox(parent)
-        return cb
+        return QtWidgets.QCheckBox(parent)
     def setEditorData(self, editor, index):
         editor.setChecked(_boolish(index.data()))
     def setModelData(self, editor, model, index):
@@ -173,13 +174,22 @@ class AppointmentDialog(QtWidgets.QDialog):
         btns.rejected.connect(self.reject)
 
     def _apply_style(self):
-        self.setStyleSheet("""
-        QLabel, QLineEdit, QComboBox, QTextEdit { color:#e5e7eb; }
-        QLineEdit, QComboBox, QTextEdit, QDateEdit, QTimeEdit {
-            background:#0b1020; border:1px solid #1f2937; border-radius:8px; padding:6px 8px;
-        }
-        QDialog { background:#0f172a; }
-        QGroupBox, QWidget { background:#0f172a; }
+        p = DS_COLORS
+        self.setStyleSheet(f"""
+        QDialog {{
+            background:{p['panel']};
+            border:1px solid rgba(255,255,255,0.45);
+            border-radius:12px;
+        }}
+        QLabel {{ color:{p['text']}; }}
+        QLineEdit, QComboBox, QTextEdit, QDateEdit, QTimeEdit {{
+            background:{p['inputBg']}; color:#0f172a;
+            border:1px solid {p['stroke']}; border-radius:8px; padding:6px 10px;
+            selection-background-color:{p['selBg']}; selection-color:{p['selFg']};
+        }}
+        QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QDateEdit:focus, QTimeEdit:focus {{
+            border:1px solid {p['primary']};
+        }}
         """)
 
     def _accept(self):
@@ -334,27 +344,78 @@ class AppointmentTab(QtWidgets.QWidget):
         root.addWidget(card)
         root.addStretch(1)
 
-        # Style (aligned with your dark theme + readable tab text)
-        self.setStyleSheet("""
-        QFrame[modernCard="true"] { background:#0f172a; border:1px solid #1f2937; border-radius:12px; }
-        QLabel, QTableWidget, QLineEdit, QComboBox, QPushButton { color:#e5e7eb; }
-        QLineEdit, QComboBox {
-            background:#0b1020; border:1px solid #1f2937; border-radius:8px; padding:6px 8px;
-        }
-        QHeaderView::section { background:#0b132a; color:#cbd5e1; padding:8px; border:none; }
-        QTableWidget { background:#0b1020; border:1px solid #1f2937; border-radius:10px; }
-        QPushButton { background:#0ea5e9; border:none; border-radius:8px; padding:8px 14px; font-weight:600; }
-        QPushButton[variant="ghost"] { background:#0b1020; color:#cbd5e1; border:1px solid #1f2937; }
-        QPushButton[variant="info"] { background:#22c55e; }
-        QPushButton[variant="success"] { background:#3b82f6; }
-        QPushButton[variant="danger"] { background:#ef4444; }
-        QPushButton:hover { filter:brightness(1.06); }
-        """)
+        # Apply glass QSS
+        self.setStyleSheet(self._tab_qss())
 
         # Keyboard shortcuts (clinician quality-of-life)
         QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=self._add_dialog)
         QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+S"), self, activated=self._save_all)
         QtWidgets.QShortcut(QtGui.QKeySequence("Delete"), self, activated=self._delete_selected)
+
+    def _tab_qss(self) -> str:
+        p = DS_COLORS
+        return f"""
+        QWidget {{ color:{p['text']}; font-family:'Segoe UI', Arial; font-size:14px; }}
+
+        /* Cards */
+        QFrame[modernCard="true"] {{
+            background:{p['panel']};
+            border:1px solid rgba(255,255,255,0.45);
+            border-radius:12px;
+        }}
+
+        /* Inputs / selects */
+        QLineEdit, QComboBox {{
+            background:{p['inputBg']}; color:#0f172a;
+            border:1px solid {p['stroke']}; border-radius:8px; padding:6px 10px;
+            selection-background-color:{p['selBg']}; selection-color:{p['selFg']};
+        }}
+        QLineEdit:focus, QComboBox:focus {{
+            border:1px solid {p['primary']};
+            box-shadow:0 0 0 2px rgba(58,141,255,0.18);
+        }}
+
+        /* Buttons */
+        QPushButton {{
+            border-radius:10px; padding:8px 14px; font-weight:600;
+            border:1px solid transparent; background:{p['primary']}; color:white;
+        }}
+        QPushButton:hover {{ filter:brightness(1.05); }}
+        QPushButton:pressed {{ filter:brightness(0.95); }}
+        QPushButton[variant="ghost"] {{
+            background: rgba(255,255,255,0.85); color:#0F172A; border:1px solid {p['stroke']};
+        }}
+        QPushButton[variant="ghost"]:hover {{ background: rgba(255,255,255,0.95); }}
+        QPushButton[variant="success"] {{ background:{p['success']}; color:white; }}
+        QPushButton[variant="info"]    {{ background:{p['info']}; color:white; }}
+        QPushButton[variant="danger"]  {{ background:{p['danger']}; color:white; }}
+
+        /* Tables */
+        QHeaderView::section {{
+            background: rgba(255,255,255,0.85);
+            color:#334155;
+            padding:8px 10px;
+            border:0; border-bottom:1px solid {p['stroke']};
+            font-weight:600;
+        }}
+        QTableWidget, QTableView {{
+            background:{p['panelInner']};
+            color:#0f172a;
+            border:1px solid {p['stroke']};
+            border-radius:10px;
+            gridline-color:#E8EEF7;
+            selection-background-color:{p['selBg']};
+            selection-color:{p['selFg']};
+        }}
+        QTableView::item:!selected:alternate {{ background:{p['stripe']}; }}
+
+        /* Scrollbars */
+        QScrollBar:vertical {{ background:transparent; width:10px; margin:4px; }}
+        QScrollBar::handle:vertical {{ background:rgba(58,141,255,0.55); min-height:28px; border-radius:6px; }}
+        QScrollBar:horizontal {{ background:transparent; height:10px; margin:4px; }}
+        QScrollBar::handle:horizontal {{ background:rgba(58,141,255,0.55); min-width:28px; border-radius:6px; }}
+        QScrollBar::add-line, QScrollBar::sub-line {{ width:0; height:0; }}
+        """
 
     # ---- data flow ----
     def _normalize(self, ap: dict) -> dict:
@@ -575,7 +636,6 @@ class AppointmentTab(QtWidgets.QWidget):
 
     # ---- column width persistence ----
     def _settings(self):
-        # Match main.py organization/app so settings land together
         return QtCore.QSettings("YourOrg", "MedicalDocAI Demo v1.9.3")
 
     def _save_column_widths(self):
@@ -598,11 +658,16 @@ if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
     try:
-        from UI.modern_theme import ModernTheme
-        ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
+        from UI.design_system import apply_global_theme, apply_window_backdrop
+        apply_global_theme(app, base_point_size=11)
     except Exception:
-        pass
+        app.setStyle("Fusion")
     w = AppointmentTab()
     w.resize(1100, 720)
     w.show()
+    try:
+        from UI.design_system import apply_window_backdrop
+        apply_window_backdrop(w, prefer_mica=True)
+    except Exception:
+        pass
     sys.exit(app.exec_())

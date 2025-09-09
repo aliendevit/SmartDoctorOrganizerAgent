@@ -10,7 +10,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtGui import QDoubleValidator
 from PyQt5.QtWidgets import QLineEdit, QStyledItemDelegate
 
-# ---- Photo drop-zone widget (make sure widgets/photo_field.py exists) ----
+# ---- Photo drop-zone widget (ensure widgets/photo_field.py exists) ----
 from widgets.photo_field import PhotoField
 
 # ---------------- data layer (safe fallbacks) ----------------
@@ -70,9 +70,8 @@ class NumberDelegate(QStyledItemDelegate):
 
     def setModelData(self, editor, model, index):
         val = _to_float(editor.text())
-        # store pretty text for display; numeric role for correct sorting
-        model.setData(index, f"{val:.2f}")
-        model.setData(index, val, QtCore.Qt.UserRole)
+        model.setData(index, f"{val:.2f}")               # display
+        model.setData(index, val, QtCore.Qt.UserRole)    # numeric sort
 
 # ---------------- collapsible section ----------------
 class CollapsibleSection(QtWidgets.QWidget):
@@ -87,7 +86,7 @@ class CollapsibleSection(QtWidgets.QWidget):
         self._grid.setHorizontalSpacing(12)
         self._grid.setVerticalSpacing(10)
 
-        # Header line
+        # Header
         self._btn = QtWidgets.QToolButton(self)
         self._btn.setText("▾")
         self._btn.setCheckable(True)
@@ -112,26 +111,27 @@ class CollapsibleSection(QtWidgets.QWidget):
         head.addLayout(v)
         head.addStretch(1)
 
-        self._outer = QtWidgets.QVBoxLayout(self)
-        self._outer.setContentsMargins(10, 10, 10, 10)
-        self._outer.setSpacing(6)
-        self._outer.addLayout(head)
-        self._outer.addWidget(self._content)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+        outer.setSpacing(6)
+        outer.addLayout(head)
+        outer.addWidget(self._content)
 
-        # subtle card look
+        # card hint
         self.setProperty("modernCard", True)
         self.setStyleSheet("""
-        QWidget[modernCard="true"]#dummy { }
-        QWidget > QWidget#SectionContent { border:1px solid #1f2937; border-radius:10px; background:#0b1020; }
-        QToolButton { font: 700 14px 'Segoe UI'; color:#e5e7eb; background:transparent; border:0; }
+        QWidget > QWidget#SectionContent {
+            border:1px solid #E5EFFA; border-radius:10px; background: rgba(255,255,255,0.65);
+        }
+        QToolButton { font: 700 14px 'Segoe UI'; color:#0F172A; background:transparent; border:0; }
         """)
-        self._label_w = 130
+        self._label_w = 140
 
     def add_row(self, row: int, label: str, widget: QtWidgets.QWidget):
         lab = QtWidgets.QLabel(label)
         lab.setMinimumWidth(self._label_w)
         lab.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        lab.setStyleSheet("color:#cbd5e1;")
+        lab.setStyleSheet("color:#334155;")   # slate-600
         self._grid.addWidget(lab, row, 0)
         self._grid.addWidget(widget, row, 1)
 
@@ -179,7 +179,7 @@ class AccountsTab(QtWidgets.QWidget):
         h = QtWidgets.QHBoxLayout(hdr); h.setContentsMargins(14, 14, 14, 14); h.setSpacing(10)
         title = QtWidgets.QLabel(_tr("Patient Accounts")); title.setStyleSheet("font:700 18pt 'Segoe UI';")
         subtitle = QtWidgets.QLabel(_tr("Add, review, and update billing & profile"))
-        subtitle.setStyleSheet("color:#94a3b8; margin-left:6px;")
+        subtitle.setStyleSheet("color:#64748b; margin-left:6px;")  # slate-500
         left_hdr = QtWidgets.QVBoxLayout(); left_hdr.addWidget(title); left_hdr.addWidget(subtitle)
         h.addLayout(left_hdr); h.addStretch(1)
 
@@ -255,7 +255,7 @@ class AccountsTab(QtWidgets.QWidget):
         self.btn_add   = QtWidgets.QPushButton(_tr("Add Client")); self.btn_add.setProperty("variant", "success")
         row.addStretch(1); row.addWidget(self.btn_clear); row.addWidget(self.btn_add)
         hint = QtWidgets.QLabel(_tr("Tip: Ctrl+S to save table edits · Enter to add client"))
-        hint.setStyleSheet("color:#94a3b8;")
+        hint.setStyleSheet("color:#64748b;")  # slate-500
         sec_actions = CollapsibleSection(_tr("Actions"))
         w = QtWidgets.QWidget(); lw = QtWidgets.QVBoxLayout(w); lw.setContentsMargins(0,0,0,0); lw.setSpacing(8)
         lw.addLayout(row); lw.addWidget(hint)
@@ -302,10 +302,104 @@ class AccountsTab(QtWidgets.QWidget):
         self.status = QtWidgets.QLabel("")
         root.addWidget(self.status)
 
+        # Menus & shortcuts
         self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_table_menu)
         QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+S"), self, activated=self._save_all)
         QtWidgets.QShortcut(QtGui.QKeySequence("Return"), self, activated=self._add_client_from_form)
+
+        # ✨ apply refined local theme colors
+        self._apply_local_theme()
+
+        _polish(self.refresh_btn, self.btn_export, self.btn_add, self.btn_clear, self.open_btn, self.save_all_btn)
+
+    # ---------- local theme ----------
+    def _apply_local_theme(self):
+        """
+        Doctor-friendly colors layered over your global glass theme.
+        """
+        self.setStyleSheet("""
+        /* Base */
+        QWidget { font-family: 'Segoe UI', Arial; font-size: 14px; color: #1f2937; }
+        QLabel { color: #111827; }
+
+        /* Cards */
+        QFrame[modernCard="true"] {
+            background: rgba(255,255,255,0.55);
+            border: 1px solid rgba(255,255,255,0.45);
+            border-radius: 12px;
+        }
+
+        /* Sections */
+        QWidget > QWidget#SectionContent {
+            background: rgba(255,255,255,0.65);
+            border: 1px solid #E5EFFA;
+            border-radius: 10px;
+        }
+        QToolButton { font: 700 14px 'Segoe UI'; color: #0F172A; background: transparent; border: 0; }
+
+        /* Inputs */
+        QLineEdit, QSpinBox, QDoubleSpinBox, QTextEdit, QDateEdit, QTimeEdit {
+            background: rgba(255,255,255,0.88);
+            color: #0f172a;
+            border: 1px solid #D6E4F5;
+            border-radius: 8px; 
+            padding: 6px 10px;
+            selection-background-color: #3A8DFF;
+            selection-color: white;
+        }
+        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus, QDateEdit:focus, QTimeEdit:focus {
+            border: 1px solid #3A8DFF;
+            box-shadow: 0 0 0 2px rgba(58,141,255,0.18);
+        }
+
+        /* Buttons */
+        QPushButton {
+            border-radius: 10px; padding: 8px 14px; font-weight: 600; border: 1px solid transparent;
+            background: #3A8DFF; color: white;
+        }
+        QPushButton:hover { filter: brightness(1.05); }
+        QPushButton:pressed { filter: brightness(0.95); }
+
+        QPushButton[variant="ghost"] { background: rgba(255,255,255,0.85); color: #0F172A; border: 1px solid #D6E4F5; }
+        QPushButton[variant="ghost"]:hover { background: rgba(255,255,255,0.95); }
+
+        QPushButton[variant="info"] { background: #2CBBA6; color: white; }
+        QPushButton[variant="success"] { background: #7A77FF; color: white; }
+
+        /* Table */
+        QHeaderView::section {
+            background: rgba(255,255,255,0.85);
+            color: #334155;
+            padding: 8px 10px;
+            border: 0; border-bottom: 1px solid #E5EFFA;
+            font-weight: 600;
+        }
+        QTableWidget { 
+            background: rgba(255,255,255,0.65);
+            color: #0f172a;
+            border: 1px solid #E5EFFA; border-radius: 10px;
+            gridline-color: #E8EEF7;
+            selection-background-color: #3A8DFF; selection-color: white;
+        }
+        QTableView::item:!selected:alternate { background: rgba(240,247,255,0.65); }
+
+        /* Scrollbars */
+        QScrollBar:vertical { background: transparent; width: 10px; margin: 4px; }
+        QScrollBar::handle:vertical { background: rgba(58,141,255,0.55); min-height: 28px; border-radius: 6px; }
+        QScrollBar:horizontal { background: transparent; height: 10px; margin: 4px; }
+        QScrollBar::handle:horizontal { background: rgba(58,141,255,0.55); min-width: 28px; border-radius: 6px; }
+        QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+
+        /* Tooltips */
+        QToolTip {
+            background-color: rgba(255,255,255,0.98);
+            color: #0f172a;
+            border: 1px solid #E5EFFA;
+            border-radius: 8px;
+            padding: 6px 8px;
+        }
+        """)
 
     # ---------- signals ----------
     def _wire_signals(self):
@@ -322,7 +416,7 @@ class AccountsTab(QtWidgets.QWidget):
         self.in_total.valueChanged.connect(self._recalc_owed)
         self.in_paid.valueChanged.connect(self._recalc_owed)
 
-    # ---------- helpers (clear, recalc owed, CRUD, etc.) ----------
+    # ---------- helpers ----------
     def _recalc_owed(self):
         owed = max(0.0, float(self.in_total.value()) - float(self.in_paid.value()))
         self.in_owed.blockSignals(True)
@@ -397,13 +491,10 @@ class AccountsTab(QtWidgets.QWidget):
             def _it(text, editable=False, right=False, numeric_role=None):
                 it = QtWidgets.QTableWidgetItem("" if text is None else str(text))
                 flags = it.flags()
-                if not editable:
-                    flags &= ~QtCore.Qt.ItemIsEditable
+                if not editable: flags &= ~QtCore.Qt.ItemIsEditable
                 it.setFlags(flags)
-                if right:
-                    it.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-                if numeric_role is not None:
-                    it.setData(QtCore.Qt.UserRole, numeric_role)
+                if right: it.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                if numeric_role is not None: it.setData(QtCore.Qt.UserRole, numeric_role)
                 return it
 
             total_paid = _to_float(c.get("Total Paid", 0))
@@ -411,22 +502,19 @@ class AccountsTab(QtWidgets.QWidget):
             owed_val = max(0.0, total_amount - total_paid)
             has_photo = "✅" if (c.get("Image") or "").strip() else "—"
 
-            self.table.setItem(i, self.COL_NAME, _it(c.get("Name", "")))
-            self.table.setItem(i, self.COL_AGE, _it(c.get("Age", "")))
-            self.table.setItem(i, self.COL_PAID,
-                               _it(f"{total_paid:.2f}", editable=True, right=True, numeric_role=total_paid))
-            self.table.setItem(i, self.COL_OWED, _it(f"{owed_val:.2f}", right=True, numeric_role=owed_val))
-            self.table.setItem(i, self.COL_TOTAL,
-                               _it(f"{total_amount:.2f}", editable=True, right=True, numeric_role=total_amount))
+            self.table.setItem(i, self.COL_NAME,  _it(c.get("Name", "")))
+            self.table.setItem(i, self.COL_AGE,   _it(c.get("Age", "")))
+            self.table.setItem(i, self.COL_PAID,  _it(f"{total_paid:.2f}", editable=True, right=True, numeric_role=total_paid))
+            self.table.setItem(i, self.COL_OWED,  _it(f"{owed_val:.2f}", right=True, numeric_role=owed_val))
+            self.table.setItem(i, self.COL_TOTAL, _it(f"{total_amount:.2f}", editable=True, right=True, numeric_role=total_amount))
             self.table.setItem(i, self.COL_PHOTO, _it(has_photo))
 
-            # Subtle highlighting for non-zero balances
+            # Gentle highlight if balance owed
             if owed_val > 0.01:
-                bg = QtGui.QColor("#2a1a0b")  # warm subtle tone in dark mode
+                bg = QtGui.QColor("#FFF8E1")  # pale cream (readable on light)
                 for col in range(self.table.columnCount()):
                     it = self.table.item(i, col)
-                    if it:
-                        it.setBackground(QtGui.QBrush(bg))
+                    if it: it.setBackground(QtGui.QBrush(bg))
 
         self.table.blockSignals(False)
         self._building = False
@@ -435,7 +523,6 @@ class AccountsTab(QtWidgets.QWidget):
     def _on_cell_changed(self, row, column):
         if self._building:
             return
-        # Only Paid / Total are editable; recompute Owed + persist (debounced)
         if column not in (self.COL_PAID, self.COL_TOTAL):
             return
         try:
@@ -446,7 +533,6 @@ class AccountsTab(QtWidgets.QWidget):
             self.table.blockSignals(True)
             self.table.item(row, self.COL_PAID).setData(QtCore.Qt.UserRole, total_paid)
             self.table.item(row, self.COL_TOTAL).setData(QtCore.Qt.UserRole, total_amount)
-
             self.table.setItem(row, self.COL_OWED, QtWidgets.QTableWidgetItem(f"{owed:.2f}"))
             self.table.item(row, self.COL_OWED).setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
             self.table.item(row, self.COL_OWED).setData(QtCore.Qt.UserRole, owed)
@@ -454,7 +540,6 @@ class AccountsTab(QtWidgets.QWidget):
 
             name_key = (self._txt(row, self.COL_NAME) or "").strip()
             if name_key:
-                # debounced batch save to avoid frequent disk hits
                 self._save_debounce.start()
         except Exception:
             traceback.print_exc()
@@ -463,13 +548,11 @@ class AccountsTab(QtWidgets.QWidget):
         it = self.table.item(r, c)
         return it.text() if it else ""
 
-        # ---------- search / export ----------
-
+    # ---------- search / export ----------
     def _apply_search_filter(self):
         q = (self.search_line.text() or "").strip().lower()
         for r in range(self.table.rowCount()):
             name = (self.table.item(r, self.COL_NAME) or QtWidgets.QTableWidgetItem("")).text().lower()
-            # If you later include notes in table, include them to haystack here.
             show = (q in name) if q else True
             self.table.setRowHidden(r, not show)
 
@@ -493,8 +576,7 @@ class AccountsTab(QtWidgets.QWidget):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, _tr("Export"), _tr("Failed to export: ") + str(e))
 
-        # ---------- context / profile ----------
-
+    # ---------- context / profile ----------
     def _on_table_menu(self, pos):
         idx = self.table.indexAt(pos)
         if not idx.isValid():
@@ -540,13 +622,11 @@ class AccountsTab(QtWidgets.QWidget):
             if it0 and it0.text().strip().lower() == key:
                 for col in range(self.table.columnCount()):
                     it = self.table.item(row, col)
-                    if it:
-                        it.setBackground(QtGui.QBrush(QtGui.QColor("#fff3cd")))
+                    if it: it.setBackground(QtGui.QBrush(QtGui.QColor("#E0F2FE")))  # light sky tint
                 self.table.scrollToItem(it0, QtWidgets.QAbstractItemView.PositionAtCenter)
                 break
 
-        # ---------- save ----------
-
+    # ---------- save ----------
     def _save_all(self):
         n = self.table.rowCount()
         failures = 0
@@ -575,13 +655,11 @@ class AccountsTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.information(self, _tr("Save"), _tr("All changes saved."))
         self._refresh_from_db()
 
-        # ---------- public hook ----------
-
+    # ---------- public hook ----------
     def update_table(self):
         self._refresh_from_db()
 
-        # ---------- i18n ----------
-
+    # ---------- i18n ----------
     def retranslateUi(self):
         self.refresh_btn.setText(_tr("Refresh"))
         self.btn_export.setText(_tr("Export CSV"))
@@ -592,22 +670,22 @@ class AccountsTab(QtWidgets.QWidget):
         self.btn_clear.setText(_tr("Clear"))
         self.btn_add.setText(_tr("Add Client"))
 
-        # ---- standalone run ----
 
-    if __name__ == "__main__":
-        import sys
-        app = QtWidgets.QApplication(sys.argv)
-        try:
-            from UI import modern_theme
-            modern_theme.apply_glassy_theme(app)
-        except Exception:
-            pass
-        w = AccountsTab()
-        w.resize(1200, 760)
-        w.show()
-        try:
-            from UI import modern_theme as mt
-            mt.apply_real_glass(w, use_mica_prefer=True)
-        except Exception:
-            pass
-        sys.exit(app.exec_())
+# ---- standalone run ----
+if __name__ == "__main__":
+    import sys
+    app = QtWidgets.QApplication(sys.argv)
+    try:
+        from UI import modern_theme
+        modern_theme.apply_glassy_theme(app)
+    except Exception:
+        pass
+    w = AccountsTab()
+    w.resize(1200, 760)
+    w.show()
+    try:
+        from UI import modern_theme as mt
+        mt.apply_real_glass(w, use_mica_prefer=True)
+    except Exception:
+        pass
+    sys.exit(app.exec_())

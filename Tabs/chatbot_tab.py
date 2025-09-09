@@ -1,4 +1,4 @@
-# model_intent/chatbot_tab.py
+# model_intent/chatbot_tab.py — Glass-matched Assistant (Gemma local)
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="PyQt5.*")
 
@@ -12,13 +12,40 @@ import dateparser
 # ---------------- Local LLM client (Gemma) ----------------
 HAVE_LLM = False
 try:
-    # Expected to exist in your bundle if you enable local inference
     from model_intent.hf_client import chat_stream
     HAVE_LLM = True
 except Exception:
     HAVE_LLM = False
 
-# Generation config: dampen loops & verbosity without killing fluency
+
+# ---- design palette (robust) ----
+def _palette() -> dict:
+    """Return a safe color palette; merges optional design_system COLORS if available."""
+    defaults = {
+        "text": "#1f2937",
+        "textDim": "#334155",
+        "primary": "#3A8DFF",
+        "info": "#2CBBA6",
+        "success": "#7A77FF",
+        "danger": "#EF4444",
+        "warning": "#F59E0B",
+        "stroke": "#E5EFFA",
+        "panel": "rgba(255,255,255,0.55)",
+        "panelInner": "rgba(255,255,255,0.65)",
+        "inputBg": "rgba(255,255,255,0.88)",
+        "stripe": "rgba(240,247,255,0.65)",
+        "selBg": "#3A8DFF",
+        "selFg": "#ffffff",
+    }
+    try:
+        from UI.design_system import COLORS as THEME
+        # THEME can add/override keys; fall back to defaults for any missing ones.
+        return {**defaults, **(THEME or {})}
+    except Exception:
+        return defaults
+
+
+# Generation config
 GEN_CFG = dict(
     temperature=0.6,
     top_p=0.9,
@@ -42,7 +69,6 @@ def _is_greeting(t: str) -> bool:
 
 def _is_arithmetic_signal(t: str) -> bool:
     s = t or ''
-    # math words or simple expression like "3+4", "12.5 * (3+2)"
     return bool(
         re.search(r'\b(calc(ulate)?|math|sum|total|add|plus|minus|subtract|times|multiply|divide|percent|percentage)\b', s, re.I)
         or re.search(r'\d\s*[\+\-*/%]\s*\d', s)
@@ -98,9 +124,7 @@ def _looks_like_guideline_leak(s: str) -> bool:
 
 # ---------------- Output shaping helpers ----------------
 def _dedupe_bullets(text: str, max_items: int = 8) -> str:
-    """Keep at most max_items bullet points; remove dupes & near-dupes."""
     lines = [l.strip() for l in text.splitlines() if l.strip()]
-    # detect bullets
     bullets = []
     for l in lines:
         m = re.match(r'^[\-\*\u2022]\s*(.+)$', l)
@@ -108,17 +132,13 @@ def _dedupe_bullets(text: str, max_items: int = 8) -> str:
             bullets.append(m.group(1).strip())
     if not bullets:
         return text
-
-    seen = set()
-    clean = []
+    seen = set(); clean = []
     for item in bullets:
         key = re.sub(r'\W+', ' ', item).lower().strip()
         if key and key not in seen:
-            clean.append(item)
-            seen.add(key)
+            clean.append(item); seen.add(key)
         if len(clean) >= max_items:
             break
-
     return "- " + "\n- ".join(clean)
 
 def _trim_runaway(text: str, max_chars: int = 700) -> str:
@@ -130,9 +150,7 @@ def _trim_runaway(text: str, max_chars: int = 700) -> str:
     return cut
 
 def _collapse_repeats(text: str) -> str:
-    # Remove silly tails like "A summary ... * A summary ... * A"
     text = re.sub(r'(\b[a-z].{0,40}\b)(?:\s*\1){2,}', r'\1', text, flags=re.I)
-    # Remove repeated clause 'a summary of the clinic's services'
     text = re.sub(r"(a summary of the clinic's services[\.\!]?)(?:\s*\1){1,}", r"\1", text, flags=re.I)
     return text
 
@@ -165,13 +183,10 @@ def _parse_dt(text: str):
 def _normalize_appt_from_text_slots(user_text: str, slots: Dict[str, Any]):
     """
     Return: (name, date_ddmmyyyy, time_h12, pretty_date)
-    - If year not specified and parsed date is in the past -> bump to next year.
-    - Convert 24h time to 12h AM/PM.
-    - Default time to 12:00 PM.
     """
     name = _titlecase((slots.get("name") or "").strip())
 
-    # --- DATE ---
+    # Date
     raw_date = (slots.get("date") or "").strip()
     dt = _parse_dt(raw_date) or _parse_dt(user_text)
     today = datetime.date.today()
@@ -189,7 +204,7 @@ def _normalize_appt_from_text_slots(user_text: str, slots: Dict[str, Any]):
         date_ddmmyyyy = today.strftime("%d-%m-%Y")
         pretty_date = dt.strftime("%B %d, %Y")
 
-    # --- TIME ---
+    # Time
     raw_time = (slots.get("time") or "").strip()
     t_dt = _parse_dt(raw_time)
     time_h12 = None
@@ -279,8 +294,7 @@ class _Streamer(QtCore.QThread):
             try:
                 user = next((m["content"] for m in reversed(self.messages) if m["role"] == "user"), "")
                 reply = "Hello! How can I help you today?" if re.search(r"\b(hi|hello|hey)\b", user, flags=re.I) else "Got it. How else can I help?"
-                self.done.emit(reply)
-                return
+                self.done.emit(reply); return
             except Exception as e:
                 self.failed.emit(str(e)); return
         try:
@@ -303,6 +317,7 @@ class _Streamer(QtCore.QThread):
     def stop(self): self._stop = True
 
 # ---------------- ChatBot UI ----------------
+# --- replace your existing ChatBotTab class with this updated version ---
 class ChatBotTab(QtWidgets.QWidget):
     appointmentCreated  = QtCore.pyqtSignal(dict)
     requestCreateReport = QtCore.pyqtSignal(str, str)
@@ -324,17 +339,15 @@ class ChatBotTab(QtWidgets.QWidget):
         self._last_user: str = ""
         self._build_ui()
 
-    def tr(self, t):
-        try:
-            from features.translation_helper import tr
-            return tr(t)
-        except Exception:
-            return t
-
+    # ---------- UI ----------
     def _build_ui(self):
-        root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 16); root.setSpacing(10)
+        p = _palette()
 
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(10)
+
+        # Header
         header = QtWidgets.QFrame(); header.setProperty("modernCard", True)
         hly = QtWidgets.QHBoxLayout(header); hly.setContentsMargins(12, 12, 12, 12)
         title = QtWidgets.QLabel(self.tr("Assistant Bot (Gemma-3 local)"))
@@ -345,17 +358,42 @@ class ChatBotTab(QtWidgets.QWidget):
         hly.addWidget(title); hly.addStretch(1); hly.addWidget(self.lbl_mode); hly.addSpacing(12); hly.addWidget(self.lbl_intent)
         root.addWidget(header)
 
+        # Quick actions (chips)
+        qa_card = QtWidgets.QFrame(); qa_card.setProperty("modernCard", True)
+        qa = QtWidgets.QGridLayout(qa_card); qa.setContentsMargins(10, 10, 10, 10); qa.setHorizontalSpacing(8); qa.setVerticalSpacing(8)
+
+        chips = [
+            ("📅 Show appointments", "List all appointments.", "show my appointments"),
+            ("➕ Book: Jane, Fri 10:30 AM", "Books an appointment (you can edit text before sending with Shift).",
+             "book appointment for Jane Smith on Friday at 10:30 AM"),
+            ("💳 Update payment (John, 200)", "Update a patient’s payment.",
+             "update payment for John Doe to 200"),
+            ("📊 Client stats", "Open the client statistics dashboard.", "show client stats"),
+            ("🕒 What time is it?", "Ask for current date/time.", "what is the time now?"),
+            ("🧮 Calculate 12.5*(3+2)", "Quick calculator.", "calc 12.5*(3+2)"),
+            ("📝 Draft report (Mary)", "Ask to draft a quick report.", "create report for Mary Johnson"),
+            ("👋 Hello", "Friendly greeting.", "hello"),
+        ]
+        cols = 4
+        for i, (label, tip, payload) in enumerate(chips):
+            btn = self._make_chip(label, payload, tip)
+            qa.addWidget(btn, i // cols, i % cols)
+
+        root.addWidget(qa_card)
+
+        # Transcript
         card = QtWidgets.QFrame(); card.setProperty("modernCard", True)
         v = QtWidgets.QVBoxLayout(card); v.setContentsMargins(12, 12, 12, 12)
         self.view = QtWidgets.QTextBrowser()
         self.view.setOpenExternalLinks(True)
-        self.view.setStyleSheet("font: 12pt 'Segoe UI';")
+        self.view.setStyleSheet("font: 12pt 'Segoe UI'; border:0;")
         v.addWidget(self.view, 1)
         root.addWidget(card, 1)
 
+        # Input row
         row = QtWidgets.QHBoxLayout()
         self.input = QtWidgets.QLineEdit(); self.input.setPlaceholderText(self.tr("Type your message…"))
-        self.btn_send = QtWidgets.QPushButton(self.tr("Send")); self.btn_send.setProperty("accent", "violet")
+        self.btn_send = QtWidgets.QPushButton(self.tr("Send")); self.btn_send.setProperty("variant", "success")
         self.btn_stop = QtWidgets.QPushButton(self.tr("Stop")); self.btn_stop.setProperty("variant", "danger"); self.btn_stop.setEnabled(False)
         _polish(self.btn_send, self.btn_stop)
         row.addWidget(self.input, 1); row.addWidget(self.btn_send); row.addWidget(self.btn_stop)
@@ -365,35 +403,81 @@ class ChatBotTab(QtWidgets.QWidget):
         self.btn_stop.clicked.connect(self._on_stop)
         self.input.returnPressed.connect(self._on_send)
 
-        self._append_assistant("Hello! I can show appointments, book (with confirmation), update payments, do quick calculations, tell time/date, and draft quick reports.")
+        # First message
+        self._append_assistant(
+            "Hello! I can show appointments, book (with confirmation), update payments, do quick calculations, "
+            "tell time/date, and draft quick reports."
+        )
 
-        # Style to match your ModernTheme cards
-        self.setStyleSheet("""
-        QFrame[modernCard="true"] { background:#0f172a; border:1px solid #1f2937; border-radius:12px; }
-        QLabel, QTextBrowser, QLineEdit, QPushButton { color:#e5e7eb; }
-        QLineEdit {
-            background:#0b1020; border:1px solid #1f2937; border-radius:8px; padding:8px 10px;
-        }
-        QPushButton { background:#0ea5e9; border:none; border-radius:8px; padding:8px 14px; font-weight:600; }
-        QPushButton[variant="danger"] { background:#ef4444; }
+        # Glass + chip styles
+        self.setStyleSheet(f"""
+        QWidget {{ color:{p.get('text', '#1f2937')}; font-family:'Segoe UI', Arial; font-size:14px; }}
+
+        QFrame[modernCard="true"] {{
+            background:{p.get('panel', 'rgba(255,255,255,0.55)')};
+            border:1px solid rgba(255,255,255,0.45);
+            border-radius:12px;
+        }}
+
+        QLineEdit {{
+            background:{p.get('inputBg','rgba(255,255,255,0.88)')}; color:#0f172a;
+            border:1px solid {p.get('stroke','#E5EFFA')}; border-radius:10px; padding:9px 12px;
+            selection-background-color:{p.get('selBg','#3A8DFF')}; selection-color:{p.get('selFg','#ffffff')};
+        }}
+        QLineEdit:focus {{ border:1px solid {p.get('primary','#3A8DFF')}; }}
+
+        QPushButton {{
+            border-radius:10px; padding:9px 14px; font-weight:600; border:1px solid transparent;
+            background:{p.get('primary','#3A8DFF')}; color:white;
+        }}
+        QPushButton[variant="success"] {{ background:{p.get('info','#2CBBA6')};  color:white; }}
+        QPushButton[variant="danger"]  {{ background:{p.get('danger','#EF4444')}; color:white; }}
+        QPushButton:hover {{ filter:brightness(1.05); }}
+        QPushButton:pressed {{ filter:brightness(0.95); }}
+
+        /* Chips */
+        QPushButton[chip="true"] {{
+            background:{p.get('stripe','rgba(240,247,255,0.65)')};
+            color:{p.get('text','#1f2937')};
+            border:1px solid {p.get('stroke','#E5EFFA')};
+            border-radius:12px;
+            padding:8px 12px;
+            text-align:left;
+        }}
+        QPushButton[chip="true"]:hover {{
+            border-color:{p.get('primary','#3A8DFF')};
+            box-shadow: 0 0 0 2px rgba(58,141,255,0.15);
+        }}
         """)
-
-    # ---- UI helpers
+    # ---------- bubble render helpers ----------
     def _append_user(self, text: str):
-        self.view.append(f"<p><b>You:</b> {_escape(text)}</p>")
+        p = _palette()
+        self.view.append(
+            f"<div style='display:flex;justify-content:flex-end;margin:6px 0'>"
+            f"<div style='max-width:70%;background:{p.get('primary','#3A8DFF')};color:#fff;"
+            f"border-radius:14px 14px 2px 14px;padding:8px 12px;box-shadow:0 1px 0 rgba(0,0,0,0.05);'>"
+            f"{html.escape(text)}</div></div>"
+        )
 
     def _append_assistant(self, text: str):
-        self.view.append(f"<p style='color:#93c5fd'><b>Assistant:</b> {_escape(text)}</p>")
+        p = _palette()
+        self.view.append(
+            f"<div style='display:flex;justify-content:flex-start;margin:6px 0'>"
+            f"<div style='max-width:72%;background:{p.get('stripe','rgba(240,247,255,0.65)')};color:#0f172a;"
+            f"border-radius:14px 14px 14px 2px;padding:8px 12px;border:1px solid {p.get('stroke','#E5EFFA')};'>"
+            f"{html.escape(text)}</div></div>"
+        )
 
     def _html_table_appointments(self, items: List[Dict[str, Any]]) -> str:
+        p = _palette()
         if not items:
             return "<p>No appointments found.</p>"
         head = (
             "<style>"
             ".appt{border-collapse:collapse;margin-top:8px;font-size:13px}"
-            ".appt th,.appt td{padding:6px 10px;border-bottom:1px solid rgba(255,255,255,0.08)}"
-            ".appt thead th{font-weight:700;text-align:left;opacity:0.95}"
-            ".appt tbody tr:nth-child(odd){background:rgba(255,255,255,0.04)}"
+            ".appt th,.appt td{padding:6px 10px;border-bottom:1px solid rgba(0,0,0,0.08)}"
+            f".appt thead th{{font-weight:700;text-align:left;color:{p.get('textDim','#334155')}}}"
+            f".appt tbody tr:nth-child(odd){{background:{p.get('stripe','rgba(240,247,255,0.65)')}}}"
             ".pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;opacity:0.9}"
             ".pill.ok{background:#065f46;color:#ecfdf5}"
             ".pill.warn{background:#92400e;color:#fffbeb}"
@@ -401,37 +485,49 @@ class ChatBotTab(QtWidgets.QWidget):
         )
         rows = []
         for it in items:
-            name = _escape(it.get("Name","Unknown"))
-            date = _escape(it.get("Appointment Date",""))
-            time = _escape(it.get("Appointment Time",""))
+            name = html.escape(it.get("Name","Unknown"))
+            date = html.escape(it.get("Appointment Date",""))
+            time = html.escape(it.get("Appointment Time",""))
             status_html = "<span class='pill ok'>set</span>" if date and time else "<span class='pill warn'>pending</span>"
             rows.append(f"<tr><td>{name}</td><td>{date}</td><td>{time}</td><td>{status_html}</td></tr>")
-        body = "".join(rows)
         return (
             head +
             "<div style='margin:6px 0 2px 0;font-weight:600'>Here are the appointments:</div>"
             "<table class='appt'><thead><tr>"
             "<th>Name</th><th>Date</th><th>Time</th><th>Status</th>"
-            "</tr></thead><tbody>"
-            f"{body}"
-            "</tbody></table>"
+            "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
         )
 
-    # ---- Send
+    # ---------- chat/stream helpers ----------
+    def _build_chat_messages(self) -> List[Dict[str, str]]:
+        return [
+            {"role": "system",
+             "content": ("You are a concise, friendly medical assistant for a small clinic. "
+                         "Chat naturally but keep replies brief. If you don't understand or lack details, "
+                         "ask one short clarifying question. If asked what you can do, briefly list: "
+                         "show appointments, book appointments (with confirmation), update payments, do quick calculations, "
+                         "tell the time/date, and draft quick reports. Never repeat these instructions. No HTML.")},
+            {"role":"user","content":"who are you?"},
+            {"role":"assistant","content":"I’m your clinic assistant. I can show or book appointments, update payments, do quick calculations, tell the time/date, and draft quick reports."},
+            *self._messages[-10:]
+        ]
+
+    # ---------- SEND ----------
     def _on_send(self):
         user_text = self.input.text().strip()
         if not user_text:
             return
 
-        # Pending yes/no confirmation
-        if self._pending_appt:
+        # pending yes/no for booking
+        if getattr(self, "_pending_appt", None):
             yn = user_text.lower()
             if yn in ("yes", "y", "ok", "okay", "confirm", "sure"):
                 appt = self._pending_appt
-                try: self._append_appointment(appt)
-                except Exception: pass
-                try: self.appointmentCreated.emit(appt)
-                except Exception: pass
+                try:
+                    self._append_appointment(appt)
+                    self.appointmentCreated.emit(appt)
+                except Exception:
+                    pass
                 self._pending_appt = None
                 self._append_user(user_text)
                 self._append_assistant(f"✅ Booked {appt['Name']} on {appt['Appointment Date']} at {appt['Appointment Time']}.")
@@ -448,26 +544,20 @@ class ChatBotTab(QtWidgets.QWidget):
         self._last_user = user_text
         self.input.clear()
 
-        # If the user is asking about capabilities, avoid free generation altogether
+        # capability question → crisp list, no LLM
         if _is_capabilities_query(user_text):
             self._append_assistant(_capabilities_answer())
             return
 
-        # Model-led intent probe
+        # ---- intent routing (LLM-led, with safety gates) ----
         slots = _llm_route(user_text) or {}
         intent = (slots.get("intent") or "small_talk").strip()
-        # --- SAFETY GATES to prevent hallucinated actions ---
+
         if _is_greeting(user_text):
             intent = "small_talk"
-
-        # calc requires an actual math signal
         elif intent == "calc" and not _is_arithmetic_signal(user_text):
-            intent = "small_talk"
-            slots.pop("expression", None)
-
-        # require a minimal keyword signal for sensitive action intents
-        elif intent in ("show_appointments", "book_appointment", "update_payment", "show_client_stats") \
-                and not _has_signal(intent, user_text):
+            intent = "small_talk"; slots.pop("expression", None)
+        elif intent in ("show_appointments","book_appointment","update_payment","show_client_stats") and not _has_signal(intent, user_text):
             intent = "small_talk"
 
         hints = []
@@ -475,19 +565,25 @@ class ChatBotTab(QtWidgets.QWidget):
             if slots.get(k): hints.append(f"{k}={slots[k]}")
         self.lbl_intent.setText(self.tr(f"Intent: {intent}") + ("  |  " + ", ".join(hints) if hints else ""))
 
-        # ---- Actions
+        # ---- Actions ----
         if intent == "show_appointments":
             items = []
-            try: items = self._load_appointments() or []
-            except Exception: pass
+            try:
+                items = self._load_appointments() or []
+            except Exception:
+                pass
             self.view.append(self._html_table_appointments(items))
-            try: self._switch_to_appts("")
-            except Exception: pass
+            try:
+                self._switch_to_appts("")
+            except Exception:
+                pass
             return
 
         if intent == "show_client_stats":
-            try: self._switch_to_client_stats()
-            except Exception: pass
+            try:
+                self._switch_to_client_stats()
+            except Exception:
+                pass
             self._append_assistant("Opened client stats.")
             return
 
@@ -495,7 +591,7 @@ class ChatBotTab(QtWidgets.QWidget):
             name, date_ddmmyyyy, time_h12, pretty_date = _normalize_appt_from_text_slots(user_text, slots)
             if not name:
                 self._append_assistant("Who is the appointment for?")
-                self._pending_appt = {"Name": "", "Appointment Date": "", "Appointment Time": ""}
+                self._pending_appt = {"Name":"", "Appointment Date":"", "Appointment Time":""}
                 return
             appt = {"Name": name, "Appointment Date": date_ddmmyyyy, "Appointment Time": time_h12}
             self._pending_appt = appt
@@ -506,29 +602,19 @@ class ChatBotTab(QtWidgets.QWidget):
             name = _titlecase((slots.get("name") or "").strip())
             amt  = slots.get("amount")
             if not name:
-                self._append_assistant("Whose payment should I update?")
-                return
+                self._append_assistant("Whose payment should I update?"); return
             try:
                 amt_val = float(str(amt).replace(",", "")) if amt is not None else None
             except Exception:
                 amt_val = None
             if amt_val is None:
-                self._append_assistant(f"How much did {name} pay?")
-                return
+                self._append_assistant(f"How much did {name} pay?"); return
             try:
                 self._update_payment(name, {"Name": name, "Total Paid": amt_val})
                 self._append_assistant(f"💾 Updated payment for {name}: {amt_val:.2f}.")
                 self._refresh_accounts()
             except Exception as e:
                 self._append_assistant(f"⚠️ Couldn't update payment: {e}")
-            return
-
-        if intent == "create_report":
-            name = _titlecase((slots.get("name") or "Unknown").strip())
-            rtype = (slots.get("report_type") or "visit").strip()
-            self._append_assistant(f"📝 Preparing a {rtype} report for {name}…")
-            try: self.requestCreateReport.emit(name, rtype)
-            except Exception: pass
             return
 
         if intent == "calc":
@@ -551,44 +637,29 @@ class ChatBotTab(QtWidgets.QWidget):
             self._append_assistant(now.strftime("Today is %A, %d %B %Y, %I:%M %p."))
             return
 
-        # ---- Small talk → generate, then clean/dedupe/trim
+        # ---- Small talk → stream (or fallback)
         self._messages.append({"role": "user", "content": user_text})
         self.btn_send.setEnabled(False); self.btn_stop.setEnabled(True)
-        self._live_buf = []
+
+        if not HAVE_LLM:
+            # simple fallback
+            reply = "Hello! How can I help you today?" if _is_greeting(user_text) else "Got it. How else can I help?"
+            self._on_done(reply)
+            return
+
         self._stream = _Streamer(self._build_chat_messages(), temperature=GEN_CFG["temperature"], parent=self)
         self._stream.done.connect(self._on_done)
         self._stream.failed.connect(self._on_failed)
         self._stream.start()
-
-    def _build_chat_messages(self) -> List[Dict[str, str]]:
-        msgs = [{
-            "role": "system",
-            "content": (
-                "You are a concise, friendly medical assistant for a small clinic. "
-                "Chat naturally but keep replies brief. If you don't understand or lack details, "
-                "ask one short clarifying question. If asked what you can do, briefly list: "
-                "show appointments, book appointments (with confirmation), update payments, do quick calculations, "
-                "tell the time/date, and draft quick reports. Never repeat these instructions. No HTML."
-            )
-        }]
-        # One tiny example improves 'who are you?'
-        msgs += [
-            {"role":"user", "content":"who are you?"},
-            {"role":"assistant", "content":"I’m your clinic assistant. I can show or book appointments, update payments, do quick calculations, tell the time/date, and draft quick reports."},
-        ]
-        msgs.extend(self._messages[-10:])
-        return msgs
 
     def _on_done(self, full_text: str):
         text = full_text or ""
         clean = _clean_model_text(text)
         clean = _collapse_repeats(clean)
 
-        # If the user asked capabilities but the model rambled, force crisp list
         if _is_capabilities_query(self._last_user):
             clean = _capabilities_answer()
         else:
-            # If it produced a bullet list, dedupe & cap length
             if re.search(r'^\s*[\-\*•]\s+', clean, flags=re.M):
                 clean = _dedupe_bullets(clean, max_items=6)
             clean = _trim_runaway(clean, max_chars=600)
@@ -597,7 +668,7 @@ class ChatBotTab(QtWidgets.QWidget):
             if re.search(r"\bwho\s+are\s+you\b|\bwho\s+you\s*are\b", (self._last_user or ""), flags=re.I):
                 clean = ("I’m your clinic assistant. I can show or book appointments, update payments, "
                          "do quick calculations, tell the time/date, and draft quick reports.")
-            elif re.search(r"\b(hi|hello|hey)\b", (self._last_user or ""), flags=re.I):
+            elif _is_greeting(self._last_user):
                 clean = "Hello! How can I help you today?"
             else:
                 clean = "Okay. How else can I help?"
@@ -606,13 +677,11 @@ class ChatBotTab(QtWidgets.QWidget):
         self._messages.append({"role": "assistant", "content": clean})
         self.btn_send.setEnabled(True); self.btn_stop.setEnabled(False)
         self._stream = None
-        self._live_buf = []
 
     def _on_failed(self, err: str):
         self._append_assistant(f"[error] {err}")
         self.btn_send.setEnabled(True); self.btn_stop.setEnabled(False)
         self._stream = None
-        self._live_buf = []
 
     def _on_stop(self):
         if self._stream:
@@ -623,12 +692,10 @@ class ChatBotTab(QtWidgets.QWidget):
 
     # ---------- public helpers ----------
     def external_send(self, text: str):
-        """Send a message programmatically from another tab (e.g., quick actions)."""
         self.input.setText(text)
         self._on_send()
 
     def set_bridge(self, bridge: Dict[str, Any]):
-        """Update action bridges at runtime without rebuilding the widget."""
         self._load_appointments   = bridge.get("load_appointments", self._load_appointments)
         self._append_appointment  = bridge.get("append_appointment", self._append_appointment)
         self._update_payment      = bridge.get("update_payment", self._update_payment)
@@ -637,7 +704,6 @@ class ChatBotTab(QtWidgets.QWidget):
         self._switch_to_client_stats = bridge.get("switch_to_client_stats", self._switch_to_client_stats)
 
     def set_llm_enabled(self, enabled: bool):
-        """Toggle LLM usage and update the header status label."""
         global HAVE_LLM
         HAVE_LLM = bool(enabled)
         self.lbl_mode.setText("LLM: ON" if HAVE_LLM else "LLM: OFF (fallback)")
@@ -649,16 +715,52 @@ class ChatBotTab(QtWidgets.QWidget):
         self.btn_send.setText(self.tr("Send"))
         self.btn_stop.setText(self.tr("Stop"))
 
+    # ---------- chip helper ----------
+    def _make_chip(self, label: str, payload: str, tooltip: str = "") -> QtWidgets.QPushButton:
+        btn = QtWidgets.QPushButton(label)
+        btn.setProperty("chip", True)
+        btn.setCursor(QtGui.QCursor(QtCore.Qt.PointingHandCursor))
+        if tooltip:
+            btn.setToolTip(tooltip + "\nTip: Shift-click to insert without sending.")
+        _polish(btn)
+
+        def on_click():
+            # Shift-click just inserts; normal click inserts + sends
+            mods = QtWidgets.QApplication.keyboardModifiers()
+            self.input.setText(payload)
+            if not (mods & QtCore.Qt.ShiftModifier):
+                self._on_send()
+        btn.clicked.connect(on_click)
+        return btn
+
+    # ---------- i18n small helper ----------
+    def tr(self, t):
+        try:
+            from features.translation_helper import tr
+            return tr(t)
+        except Exception:
+            return t
+
+
 # ---- standalone run for quick testing ----
 if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
     try:
-        from UI.modern_theme import ModernTheme
-        ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
+        from UI.design_system import apply_global_theme, apply_window_backdrop
+        apply_global_theme(app, base_point_size=11)
     except Exception:
-        pass
+        try:
+            from UI.modern_theme import ModernTheme
+            ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
+        except Exception:
+            app.setStyle("Fusion")
     w = ChatBotTab()
     w.resize(820, 620)
     w.show()
+    try:
+        from UI.design_system import apply_window_backdrop
+        apply_window_backdrop(w, prefer_mica=True)
+    except Exception:
+        pass
     sys.exit(app.exec_())

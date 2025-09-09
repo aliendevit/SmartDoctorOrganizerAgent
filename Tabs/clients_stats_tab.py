@@ -1,12 +1,4 @@
-# client_stats_tab.py
-# Senior-grade Client Stats tab:
-# - KPIs + cohorts (upcoming, overdue, highest balance, clinical flags)
-# - Name filter + "only with balance" quick toggle
-# - DPI-safe groupbox titles; dark theme friendly
-# - Optional charts (no dependency required); auto-off if matplotlib missing
-# - CSV export of current cohort tables (Desktop)
-# - Defensive parsing and i18n (translation_helper)
-
+# client_stats_tab.py  — Glass-matched Client Analytics tab
 from __future__ import annotations
 import csv
 import math
@@ -32,6 +24,18 @@ except Exception:
     def load_all_clients() -> List[Dict]: return []
     def load_appointments() -> List[Dict]: return []
 
+# ---------- design tokens (from global theme, with safe fallback) ----------
+try:
+    from UI.design_system import COLORS as DS_COLORS
+except Exception:
+    DS_COLORS = {
+        "text": "#1f2937", "textDim": "#334155", "muted": "#64748b",
+        "primary": "#3A8DFF", "info": "#2CBBA6", "success": "#7A77FF",
+        "stroke": "#E5EFFA", "panel": "rgba(255,255,255,0.55)",
+        "panelInner": "rgba(255,255,255,0.65)", "inputBg": "rgba(255,255,255,0.88)",
+        "stripe": "rgba(240,247,255,0.65)", "selBg": "#3A8DFF", "selFg": "#ffffff",
+    }
+
 # ---------- optional matplotlib ----------
 _HAS_MPL = False
 try:
@@ -42,6 +46,26 @@ try:
     _HAS_MPL = True
 except Exception:
     pass
+
+def _apply_mpl_glass_theme():
+    if not _HAS_MPL:
+        return
+    import matplotlib as mpl
+    mpl.rcParams.update({
+        "figure.facecolor": (1, 1, 1, 0),
+        "savefig.facecolor": (1, 1, 1, 0),
+        "axes.facecolor": (1, 1, 1, 0),
+        "axes.edgecolor": DS_COLORS["textDim"],
+        "axes.labelcolor": DS_COLORS["textDim"],
+        "xtick.color": DS_COLORS["textDim"],
+        "ytick.color": DS_COLORS["textDim"],
+        "grid.color": DS_COLORS["stroke"],
+        "grid.linestyle": "-",
+        "grid.alpha": 0.85,
+        "axes.grid": True,
+        "text.color": "#111827",
+        "legend.frameon": False,
+    })
 
 # ---------- clinical config ----------
 _RED_FLAG_TERMS = {
@@ -76,7 +100,6 @@ def _has_red_flags(text: str) -> bool:
 def _desktop_path() -> str:
     return os.path.join(os.path.expanduser("~"), "Desktop")
 
-# ---------- small UI bits ----------
 def _polish(*widgets):
     for w in widgets:
         try:
@@ -84,33 +107,7 @@ def _polish(*widgets):
         except Exception:
             pass
 
-class KPIBox(QtWidgets.QFrame):
-    def __init__(self, title: str, value: str, hint: str = "", accent="info", parent=None):
-        super().__init__(parent)
-        self.setProperty("modernCard", True)
-        v = QtWidgets.QVBoxLayout(self)
-        v.setContentsMargins(14, 14, 14, 14); v.setSpacing(6)
-
-        self.title = QtWidgets.QLabel(title)
-        self.title.setStyleSheet("font: 600 11pt 'Segoe UI'; color:#cbd5e1;")
-        self.value = QtWidgets.QLabel(value)
-        self.value.setStyleSheet("font: 700 24pt 'Segoe UI'; color:#e5e7eb;")
-        self.hint  = QtWidgets.QLabel(hint)
-        self.hint.setStyleSheet("font: 10pt 'Segoe UI'; color:#94a3b8;")
-        self.value.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-
-        v.addWidget(self.title); v.addWidget(self.value, 1); v.addWidget(self.hint)
-
-        accents = {"success":"#16a34a","warning":"#f59e0b","danger":"#ef4444","info":"#0ea5e9","violet":"#8b5cf6"}
-        c = accents.get(accent, "#0ea5e9")
-        self.setStyleSheet(f"""
-        KPIBox {{ border-left: 5px solid {c}; border-radius: 10px; background:#0f172a; }}
-        """)
-
-    def set(self, value: str, hint: Optional[str] = None):
-        self.value.setText(value)
-        if hint is not None: self.hint.setText(hint or "")
-
+# ---------- Styled mini table ----------
 class _MiniTable(QtWidgets.QTableWidget):
     def __init__(self, cols, headers, parent=None):
         super().__init__(0, cols, parent)
@@ -135,6 +132,37 @@ class _MiniTable(QtWidgets.QTableWidget):
         self.setSortingEnabled(True)
         self.resizeColumnsToContents()
 
+# ---------- KPI Card ----------
+class KPIBox(QtWidgets.QFrame):
+    """
+    Glassy KPI tile. Uses properties so QSS (below) paints accents consistently:
+      - setProperty('kpiCard', True)
+      - setProperty('accent', 'primary'|'teal'|'purple'|'danger'|'warning')
+    """
+    def __init__(self, title: str, value: str, hint: str = "", accent="primary", parent=None):
+        super().__init__(parent)
+        self.setProperty("kpiCard", True)
+        self.setProperty("accent", {
+            "info": "teal", "success": "purple",  # backwards-compat accents
+            "warning": "warning", "danger": "danger", "violet": "purple"
+        }.get(accent, accent))
+
+        v = QtWidgets.QVBoxLayout(self)
+        v.setContentsMargins(14, 14, 14, 14); v.setSpacing(6)
+
+        self.title = QtWidgets.QLabel(title);  self.title.setObjectName("KpiTitle")
+        self.value = QtWidgets.QLabel(value);  self.value.setObjectName("KpiValue")
+        self.hint  = QtWidgets.QLabel(hint);   self.hint.setObjectName("KpiCaption")
+
+        self.value.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+
+        v.addWidget(self.title); v.addWidget(self.value, 1); v.addWidget(self.hint)
+
+    def set(self, value: str, hint: Optional[str] = None):
+        self.value.setText(value)
+        if hint is not None: self.hint.setText(hint or "")
+
+# ---------- Cohorts container ----------
 @dataclass
 class _Cohorts:
     upcoming: List[Tuple[str,str,str]]
@@ -143,6 +171,7 @@ class _Cohorts:
     flags:    List[Tuple[str,str]]
     symptoms: List[Tuple[str,int]]
 
+# ---------- Analytics Tab ----------
 class ClientStatsTab(QtWidgets.QWidget):
     """
     • KPIs: patients, active +/-7d, overdue follow-ups, outstanding, avg A/R
@@ -160,16 +189,17 @@ class ClientStatsTab(QtWidgets.QWidget):
 
     # ---------- UI ----------
     def _build_ui(self):
+        _apply_mpl_glass_theme()
+
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12); root.setSpacing(10)
 
         # Header
         head = QtWidgets.QFrame(); head.setProperty("modernCard", True)
-        h = QtWidgets.QHBoxLayout(head); h.setContentsMargins(12, 12, 12, 12)
-        ttl = QtWidgets.QLabel(_tr("Patient Analytics"))
-        ttl.setStyleSheet("font: 700 20pt 'Segoe UI'; color:#e5e7eb;")
+        h = QtWidgets.QHBoxLayout(head); h.setContentsMargins(12, 12, 12, 12); h.setSpacing(10)
+        ttl = QtWidgets.QLabel(_tr("Patient Analytics")); ttl.setStyleSheet("font: 700 20pt 'Segoe UI';")
         sub = QtWidgets.QLabel(_tr("Operational KPIs and cohorts to guide your day"))
-        sub.setStyleSheet("color:#94a3b8; font-size:12pt;")
+        sub.setStyleSheet(f"color:{DS_COLORS['muted']}; font-size:11pt;")
         left = QtWidgets.QVBoxLayout(); left.addWidget(ttl); left.addWidget(sub)
         h.addLayout(left)
 
@@ -186,13 +216,13 @@ class ClientStatsTab(QtWidgets.QWidget):
         _polish(self.refresh_btn)
         root.addWidget(head)
 
-        # KPIs
+        # KPIs (use properties for accents)
         kpi_row = QtWidgets.QHBoxLayout()
-        self.k_total   = KPIBox(_tr("Total Patients"), "—", "", accent="violet")
-        self.k_active  = KPIBox(_tr("Active (±7d)"), "—", _tr("appt in last/next 7 days"))
+        self.k_total   = KPIBox(_tr("Total Patients"), "—", "", accent="primary")
+        self.k_active  = KPIBox(_tr("Active (±7d)"), "—", _tr("appt in last/next 7 days"), accent="teal")
         self.k_overdue = KPIBox(_tr("Overdue Follow-ups"), "—", accent="warning")
         self.k_balance = KPIBox(_tr("Outstanding Balance"), "—", accent="danger")
-        self.k_ar      = KPIBox(_tr("Avg. A/R per Patient"), "—", accent="success")
+        self.k_ar      = KPIBox(_tr("Avg. A/R per Patient"), "—", accent="purple")
         for k in (self.k_total, self.k_active, self.k_overdue, self.k_balance, self.k_ar):
             kpi_row.addWidget(k)
         root.addLayout(kpi_row)
@@ -200,7 +230,7 @@ class ClientStatsTab(QtWidgets.QWidget):
         split = QtWidgets.QSplitter(QtCore.Qt.Horizontal); split.setChildrenCollapsible(False)
         split.setSizes([640, 560]); root.addWidget(split, 1)
 
-        # DPI-safe GroupBox style
+        # DPI-safe GroupBox style (glassy)
         self._groupbox_css = self._make_groupbox_css()
 
         # LEFT column
@@ -250,45 +280,125 @@ class ClientStatsTab(QtWidgets.QWidget):
             cv.setContentsMargins(10, 18, 10, 10)
             self.fig = Figure(figsize=(5, 3), tight_layout=True)
             self.canvas = FigureCanvas(self.fig)
+            # transparent canvas styling
+            try:
+                self.canvas.setStyleSheet("background: transparent;")
+                self.fig.patch.set_alpha(0.0)
+            except Exception:
+                pass
             cv.addWidget(self.canvas)
             rv.addWidget(charts)
         else:
             note = QtWidgets.QLabel(_tr("Install matplotlib to see trend charts."))
-            note.setStyleSheet("color:#94a3b8;")
+            note.setStyleSheet(f"color:{DS_COLORS['muted']};")
             rv.addWidget(note)
 
         split.addWidget(right)
 
         self.status = QtWidgets.QLabel(""); root.addWidget(self.status)
 
-        # Dark theme consistency
-        self.setStyleSheet("""
-        QWidget { font-family:'Segoe UI', Arial; font-size:14px; }
-        QLabel { color:#e5e7eb; }
-        QFrame[modernCard="true"] { background:#0f172a; border:1px solid #1f2937; border-radius:12px; }
-        QHeaderView::section { background:#0b132a; color:#cbd5e1; padding:6px 8px; border:none; }
-        QTableWidget { background:#0b1020; color:#e5e7eb; border:1px solid #1f2937; border-radius:8px; }
-        QLineEdit { background:#0b1020; color:#e5e7eb; border:1px solid #1f2937; border-radius:8px; padding:6px 8px; }
-        QCheckBox { color:#e5e7eb; }
-        QPushButton { background:#0ea5e9; color:white; border:none; border-radius:8px; padding:8px 14px; font-weight:600; }
-        QPushButton[variant="ghost"] { background:#0b1020; color:#cbd5e1; border:1px solid #1f2937; }
-        QPushButton[variant="info"] { background:#22c55e; }
-        QPushButton:hover { filter:brightness(1.06); }
-        """)
+        # Apply glass-matched QSS for THIS TAB ONLY
+        self.setStyleSheet(self._tab_qss())
+
+    # ---------- QSS builders ----------
+    def _tab_qss(self) -> str:
+        p = DS_COLORS
+        return f"""
+        QWidget {{ color: {p['text']}; font-family:'Segoe UI', Arial; font-size:14px; }}
+
+        /* Cards */
+        QFrame[modernCard="true"] {{
+            background: {p['panel']};
+            border: 1px solid rgba(255,255,255,0.45);
+            border-radius: 12px;
+        }}
+
+        /* KPI tiles */
+        QFrame[kpiCard="true"] {{
+            background: {p['panelInner']};
+            border: 1px solid {p['stroke']};
+            border-radius: 12px;
+            padding: 10px;
+        }}
+        QFrame[kpiCard="true"][accent="primary"] {{ border-left: 6px solid {p['primary']}; }}
+        QFrame[kpiCard="true"][accent="teal"]    {{ border-left: 6px solid {p['info']};    }}
+        QFrame[kpiCard="true"][accent="purple"]  {{ border-left: 6px solid {p['success']}; }}
+        QFrame[kpiCard="true"][accent="danger"]  {{ border-left: 6px solid #ff6b6b;       }}
+        QFrame[kpiCard="true"][accent="warning"] {{ border-left: 6px solid #f59e0b;       }}
+
+        QLabel#KpiTitle   {{ color:#0f172a; font:600 11pt "Segoe UI"; }}
+        QLabel#KpiValue   {{ color:#0f172a; font:700 24pt "Segoe UI"; }}
+        QLabel#KpiCaption {{ color:{p['muted']};    font:10pt "Segoe UI"; }}
+
+        /* Group headers and tables */
+        QHeaderView::section {{
+            background: rgba(255,255,255,0.85);
+            color: #334155;
+            padding: 8px 10px;
+            border: 0; border-bottom: 1px solid {p['stroke']};
+            font-weight: 600;
+        }}
+        QTableWidget, QTableView {{
+            background: {p['panelInner']};
+            color: #0f172a;
+            border: 1px solid {p['stroke']};
+            border-radius: 10px;
+            gridline-color: #E8EEF7;
+            selection-background-color: {p['selBg']};
+            selection-color: {p['selFg']};
+        }}
+        QTableView::item:!selected:alternate {{ background: {p['stripe']}; }}
+
+        /* Inputs & buttons in header */
+        QLineEdit {{
+            background: {p['inputBg']}; color:#0f172a; border:1px solid #D6E4F5;
+            border-radius:8px; padding:6px 10px;
+            selection-background-color:{p['selBg']}; selection-color:white;
+        }}
+        QLineEdit:focus {{
+            border:1px solid {p['primary']};
+            box-shadow:0 0 0 2px rgba(58,141,255,0.18);
+        }}
+        QCheckBox {{ color:#0f172a; }}
+
+        QPushButton {{
+            border-radius: 10px; padding: 8px 14px; font-weight: 600; border: 1px solid transparent;
+            background: {p['primary']}; color: white;
+        }}
+        QPushButton:hover {{ filter: brightness(1.05); }}
+        QPushButton:pressed {{ filter: brightness(0.95); }}
+
+        QPushButton[variant="ghost"] {{
+            background: rgba(255,255,255,0.85); color: #0F172A; border: 1px solid #D6E4F5;
+        }}
+        QPushButton[variant="ghost"]:hover {{ background: rgba(255,255,255,0.95); }}
+
+        QPushButton[variant="info"]    {{ background: {p['info']};    color:white; }}
+        QPushButton[variant="success"] {{ background: {p['success']}; color:white; }}
+
+        /* Scrollbars */
+        QScrollBar:vertical {{ background: transparent; width: 10px; margin: 4px; }}
+        QScrollBar::handle:vertical {{ background: rgba(58,141,255,0.55); min-height: 28px; border-radius: 6px; }}
+        QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 4px; }}
+        QScrollBar::handle:horizontal {{ background: rgba(58,141,255,0.55); min-width: 28px; border-radius: 6px; }}
+        QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
+        """
 
     def _make_groupbox_css(self) -> str:
+        # Glassy group boxes with DPI-safe title area
         fm = QtGui.QFontMetrics(self.font())
         title_h = fm.height()
         margin_top = title_h + 12
+        p = DS_COLORS
         return f"""
         QGroupBox {{
-            color:#cbd5e1; border:1px solid #1f2937; border-radius:10px;
-            margin-top:{margin_top}px; background:#0f172a;
+            color:#0f172a; border:1px solid {p['stroke']}; border-radius:10px;
+            margin-top:{margin_top}px; background:{p['panelInner']};
         }}
         QGroupBox::title {{
             subcontrol-origin: margin; subcontrol-position: top left;
             left:16px; top:2px; padding:0 10px;
-            color:#cbd5e1; background:#0f172a; font-weight:600;
+            color:#0f172a; background:{p['panelInner']}; font-weight:600;
         }}
         """
 
@@ -458,8 +568,8 @@ class ClientStatsTab(QtWidgets.QWidget):
 
     # ---------- i18n ----------
     def retranslateUi(self):
-        # easiest: recompute everything (labels/titles rebuilt via strings)
-        self._build_ui()  # rebuild widgets with translated strings
+        # rebuild with translated strings
+        self._build_ui()
         self.refresh_data()
 
 # ---- standalone run ----
@@ -467,11 +577,17 @@ if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
     try:
-        from UI.modern_theme import ModernTheme
-        ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
+        # If you have the global theme, apply it
+        from UI.design_system import apply_global_theme, apply_window_backdrop
+        apply_global_theme(app, base_point_size=11)
     except Exception:
         pass
     w = ClientStatsTab()
     w.resize(1200, 760)
     w.show()
+    try:
+        from UI.design_system import apply_window_backdrop
+        apply_window_backdrop(w, prefer_mica=True)
+    except Exception:
+        pass
     sys.exit(app.exec_())

@@ -1,13 +1,4 @@
-# extraction_tab.py
-# Clinic-friendly Extraction tab (senior edition)
-# - No "Pause Voice" button (removed)
-# - Clear, organized 2-column layout: Left (Input + Voice), Right (Structured Preview)
-# - Safer parsing (arabic/english; robust date/time normalization)
-# - Built-in mini Agent (simulate) with 0.7s step ticker
-# - Actions: insert_db, followup_rule, tag_status, generate_pdf, write_json
-# - Keyboard shortcuts:  Ctrl+Enter = Process,  Ctrl+L = Load sample,  F1 = Agent
-# - Persist last input & language choice via QSettings
-# - High-contrast, clinic-safe QSS; small footprint
+# extraction_tab.py — Glass-matched Clinical Extraction (senior edition)
 
 import os
 import re
@@ -17,6 +8,19 @@ from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Tuple
 
 from PyQt5 import QtWidgets, QtCore, QtGui
+
+# ---------- Global design tokens (safe fallback if design_system not present)
+try:
+    from UI.design_system import COLORS as DS_COLORS
+except Exception:
+    DS_COLORS = {
+        "text": "#1f2937", "textDim": "#334155", "muted": "#64748b",
+        "primary": "#3A8DFF", "info": "#2CBBA6", "success": "#7A77FF",
+        "stroke": "#E5EFFA", "panel": "rgba(255,255,255,0.55)",
+        "panelInner": "rgba(255,255,255,0.65)", "inputBg": "rgba(255,255,255,0.88)",
+        "stripe": "rgba(240,247,255,0.65)", "selBg": "#3A8DFF", "selFg": "#ffffff",
+    }
+
 REPORTLAB_OK = True
 try:
     from reportlab.lib.pagesizes import letter
@@ -31,7 +35,6 @@ except Exception:
 import speech_recognition as sr
 from utils.app_paths import reports_dir
 
-# pdf = reports_dir() / f"{safe}_report.pdf"
 # ---------- Optional SmartExtractor ----------
 _EXTRACTOR = None
 try:
@@ -75,7 +78,6 @@ def _polish(*widgets):
             pass
 
 # ====================== Parsing helpers ======================
-
 _DATE_RX = re.compile(r'(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})')
 _TIME_RX = re.compile(r'(\d{1,2}:\d{2}\s*[APMapm]{2}|\d{1,2}:\d{2})')
 _AR_CHARS = re.compile(r'[\u0600-\u06FF]')
@@ -90,7 +92,6 @@ def _safe_dt_parse(date_str: str, fmt_list=("%d-%m-%Y","%d/%m/%Y","%d-%m-%y","%d
             return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
         except Exception:
             pass
-    # fallback: today (doctors prefer a concrete value over None)
     return _today_str()
 
 def _norm_time(s: str) -> str:
@@ -114,13 +115,11 @@ def _fallback_parse_patient_info(text: str) -> Dict:
     m_age = re.search(r'\b(?:age|aged)\s*[:\-]?\s*(\d{1,3})\b', text, re.I)
     age = int(m_age.group(1)) if m_age else ""
 
-    # symptoms
     symptoms = []
     m_sym = re.search(r'(?:complains of|symptoms?[:\-]?)\s+([^\.\n]+)', text, re.I)
     if m_sym:
         symptoms = [s.strip() for s in re.split(r'[,\u060C]+', m_sym.group(1)) if s.strip()]
 
-    # date/time
     appt_date = None; appt_time = None
     m_d = _DATE_RX.search(text); m_t = _TIME_RX.search(text)
     if m_d: appt_date = _safe_dt_parse(m_d.group(1))
@@ -131,7 +130,6 @@ def _fallback_parse_patient_info(text: str) -> Dict:
         elif "tomorrow" in lo:
             appt_date = QtCore.QDate.currentDate().addDays(1).toString("dd-MM-yyyy")
 
-    # summary
     summary = ""
     m_sum = re.search(r'(?:summary)[:\-]\s*(.+)', text, re.I)
     if m_sum:
@@ -140,7 +138,6 @@ def _fallback_parse_patient_info(text: str) -> Dict:
         sentences = re.split(r'(?<=[.!?])\s+', text)
         summary = " ".join(sentences[:2]).strip() if sentences else ""
 
-    # follow up
     follow_up = ""
     m_fu = re.search(r'(?:follow[- ]?up)[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|today|tomorrow)', text, re.I)
     if m_fu:
@@ -187,7 +184,6 @@ def parse_patient_info(text: str) -> Dict:
     return _fallback_parse_patient_info(text)
 
 # ====================== Whisper helpers ======================
-
 USE_WHISPER_BY_DEFAULT = True
 
 def _make_whisper_model(size: str):
@@ -250,7 +246,6 @@ class _WhisperThread(QtCore.QThread):
                 except Exception: pass
 
 # ====================== Voice Input (no pause control) ======================
-
 class VoiceInputWidget(QtWidgets.QWidget):
     textReady = QtCore.pyqtSignal(str)
 
@@ -341,7 +336,6 @@ class VoiceInputWidget(QtWidgets.QWidget):
             self._t = t; t.start()
             return
 
-        # Google fallback
         self.btn.setText(_tr(self, "Transcribing… (Google)")); QtWidgets.QApplication.processEvents()
         try:
             if g_lang is None:
@@ -382,11 +376,9 @@ class VoiceInputWidget(QtWidgets.QWidget):
         self._refresh_labels()
 
 # ====================== Report helpers ======================
-
 def generate_pdf_report(data: Dict, file_path: str):
     if not REPORTLAB_OK:
         raise RuntimeError('ReportLab is not installed. Install `reportlab` to enable PDF export.')
-    # defensive: coerce None to safe strings
     doc = SimpleDocTemplate(file_path, pagesize=letter)
     styles = getSampleStyleSheet()
     elements = []
@@ -425,7 +417,6 @@ def generate_pdf_report(data: Dict, file_path: str):
     doc.build(elements)
 
 # ====================== Minimal Agent & actions ======================
-
 class Agent(QtCore.QObject):
     log = QtCore.pyqtSignal(str)
     step_started = QtCore.pyqtSignal(str)
@@ -525,7 +516,6 @@ def action_write_json(ctx: Dict) -> Tuple[Dict, List[str]]:
     return ctx, lines
 
 # ====================== Agent Simulator Dialog ======================
-
 class AgentSimDialog(QtWidgets.QDialog):
     def __init__(self, agent: Agent, steps: List[str], ctx: Dict, parent=None):
         super().__init__(parent)
@@ -615,7 +605,6 @@ class _AgentWorker(QtCore.QThread):
             self.failed.emit(str(e))
 
 # ====================== Main Extraction Tab ======================
-
 class ExtractionTab(QtWidgets.QWidget):
     dataProcessed = QtCore.pyqtSignal(dict)
     appointmentProcessed = QtCore.pyqtSignal(dict)
@@ -634,13 +623,13 @@ class ExtractionTab(QtWidgets.QWidget):
     def _setup_ui(self):
         root = QtWidgets.QVBoxLayout(self); root.setContentsMargins(16,16,16,16); root.setSpacing(12)
 
-        # Header (simple, clinic calm)
+        # Header
         header = QtWidgets.QFrame(); header.setProperty("modernCard", True)
         h = QtWidgets.QHBoxLayout(header); h.setContentsMargins(12,12,12,12); h.setSpacing(8)
         title = QtWidgets.QLabel(self.tr("Clinical Extraction"))
         title.setStyleSheet("font: 700 18pt 'Segoe UI';")
         subtitle = QtWidgets.QLabel(self.tr("Dictate or paste—AI structures the visit, schedules follow-up, and generates a report."))
-        subtitle.setStyleSheet("color:#94a3b8;")
+        subtitle.setStyleSheet(f"color:{DS_COLORS['muted']};")
         left = QtWidgets.QVBoxLayout(); left.addWidget(title); left.addWidget(subtitle)
         h.addLayout(left); h.addStretch(1)
         root.addWidget(header)
@@ -654,7 +643,7 @@ class ExtractionTab(QtWidgets.QWidget):
         lc = QtWidgets.QVBoxLayout(left_card); lc.setContentsMargins(12,12,12,12); lc.setSpacing(8)
 
         lbl = QtWidgets.QLabel(self.tr("Patient narrative (Arabic/English)."))
-        lbl.setStyleSheet("color:#cbd5e1;")
+        lbl.setStyleSheet(f"color:{DS_COLORS['textDim']};")
         self.txt = QtWidgets.QTextEdit(); self.txt.setMinimumHeight(180)
         self.txt.setPlaceholderText(self.tr("Example: Patient Jane Smith, age 23, complains of cough and headache. Appointment 21-11-2025 at 10:30 AM. Follow-up 28-11-2025. Summary: ..."))
         lc.addWidget(lbl); lc.addWidget(self.txt, 1)
@@ -667,7 +656,7 @@ class ExtractionTab(QtWidgets.QWidget):
         vs.addWidget(self.voice, 1)
         lc.addWidget(voice_strip)
 
-        # Actions row (primary → Process)
+        # Actions row
         actions = QtWidgets.QHBoxLayout(); actions.setSpacing(8)
         self.btn_process = QtWidgets.QPushButton(self.tr("Process (Ctrl+Enter)"))
         self.btn_process.setProperty("variant","success"); _polish(self.btn_process)
@@ -729,25 +718,82 @@ class ExtractionTab(QtWidgets.QWidget):
         QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+L"), self, activated=self._load_test)
         QtWidgets.QShortcut(QtGui.QKeySequence("F1"), self, activated=self._open_agent)
 
-        # Timers for AAA auto-phase (kept for parity)
+        # Timers (kept)
         self._t1 = QtCore.QTimer(self); self._t1.setSingleShot(True); self._t1.timeout.connect(self._save_report)
         self._t2 = QtCore.QTimer(self); self._t2.setSingleShot(True); self._t2.timeout.connect(self._append_excel)
 
-        # Theme / QSS
-        self.setStyleSheet("""
-        QFrame[modernCard="true"] { background:#0f172a; border:1px solid #1f2937; border-radius:12px; }
-        QLabel, QTableWidget, QLineEdit, QComboBox, QPushButton, QTextEdit { color:#e5e7eb; }
-        QLineEdit, QComboBox, QTextEdit {
-            background:#0b1020; border:1px solid #1f2937; border-radius:8px; padding:6px 8px;
-        }
-        QHeaderView::section { background:#0b132a; color:#cbd5e1; padding:8px; border:none; }
-        QTableWidget { background:#0b1020; border:1px solid #1f2937; border-radius:10px; }
-        QPushButton { background:#0ea5e9; border:none; border-radius:8px; padding:9px 14px; font-weight:600; }
-        QPushButton[variant="ghost"] { background:#0b1020; color:#cbd5e1; border:1px solid #1f2937; }
-        QPushButton[variant="success"] { background:#22c55e; }
-        QPushButton[variant="info"] { background:#3b82f6; }
-        QPushButton:hover { filter:brightness(1.06); }
-        """)
+        # Apply glass theme for this tab
+        self.setStyleSheet(self._tab_qss())
+
+    # Glassy QSS for this tab
+    def _tab_qss(self) -> str:
+        p = DS_COLORS
+        return f"""
+        QWidget {{ color:{p['text']}; font-family:'Segoe UI', Arial; font-size:14px; }}
+
+        /* Cards */
+        QFrame[modernCard="true"] {{
+            background:{p['panel']};
+            border:1px solid rgba(255,255,255,0.45);
+            border-radius:12px;
+        }}
+
+        /* Inputs */
+        QLineEdit, QComboBox, QTextEdit {{
+            background:{p['inputBg']};
+            color:#0f172a;
+            border:1px solid #D6E4F5;
+            border-radius:8px;
+            padding:6px 10px;
+            selection-background-color:{p['selBg']};
+            selection-color:{p['selFg']};
+        }}
+        QLineEdit:focus, QComboBox:focus, QTextEdit:focus {{
+            border:1px solid {p['primary']};
+            box-shadow:0 0 0 2px rgba(58,141,255,0.18);
+        }}
+
+        /* Buttons */
+        QPushButton {{
+            border-radius:10px; padding:9px 14px; font-weight:600;
+            border:1px solid transparent; background:{p['primary']}; color:white;
+        }}
+        QPushButton:hover {{ filter:brightness(1.05); }}
+        QPushButton:pressed {{ filter:brightness(0.95); }}
+
+        QPushButton[variant="ghost"] {{
+            background: rgba(255,255,255,0.85); color:#0F172A; border:1px solid #D6E4F5;
+        }}
+        QPushButton[variant="ghost"]:hover {{ background: rgba(255,255,255,0.95); }}
+        QPushButton[variant="success"] {{ background:{p['success']}; color:white; }}
+        QPushButton[variant="info"]    {{ background:{p['info']};    color:white; }}
+
+        /* Tables */
+        QHeaderView::section {{
+            background: rgba(255,255,255,0.85);
+            color:#334155;
+            padding:8px 10px;
+            border:0; border-bottom:1px solid {p['stroke']};
+            font-weight:600;
+        }}
+        QTableWidget, QTableView {{
+            background:{p['panelInner']};
+            color:#0f172a;
+            border:1px solid {p['stroke']};
+            border-radius:10px;
+            gridline-color:#E8EEF7;
+            selection-background-color:{p['selBg']};
+            selection-color:{p['selFg']};
+        }}
+        QTableView::item:!selected:alternate {{ background:{p['stripe']}; }}
+
+        /* Scrollbars */
+        QScrollBar:vertical {{ background:transparent; width:10px; margin:4px; }}
+        QScrollBar::handle:vertical {{ background:rgba(58,141,255,0.55); min-height:28px; border-radius:6px; }}
+        QScrollBar:horizontal {{ background:transparent; height:10px; margin:4px; }}
+        QScrollBar::handle:horizontal {{ background:rgba(58,141,255,0.55); min-width:28px; border-radius:6px; }}
+        QScrollBar::add-line, QScrollBar::sub-line {{ width:0; height:0; }}
+        """
 
     # ---------- Agent ----------
     def _build_agent(self):
@@ -766,7 +812,6 @@ class ExtractionTab(QtWidgets.QWidget):
             last_lang = self._settings.value("extraction/last_lang", "auto", type=str)
             if last_text:
                 self.txt.setPlainText(last_text)
-            # restore language choice if exists
             i = self.voice.combo.findData(last_lang)
             if i >= 0:
                 self.voice.combo.setCurrentIndex(i)
@@ -824,7 +869,6 @@ class ExtractionTab(QtWidgets.QWidget):
             self.appointmentProcessed.emit(dict(appt_payload))
             self.switchToAppointments.emit(appt_payload.get("Name","Unknown"))
 
-            # best-effort DB insert
             try:
                 from data.data import insert_client
                 insert_client(self.current_data)
@@ -843,7 +887,6 @@ class ExtractionTab(QtWidgets.QWidget):
     def _populate_table(self, data: Dict):
         self.table.setRowCount(0)
         fnt = QtGui.QFont("Segoe UI", 11)
-        # display in a clinically meaningful order
         order = [
             "Name","Age","Symptoms","Summary","Notes",
             "Date","Appointment Date","Appointment Time","Follow-Up Date"
@@ -905,9 +948,14 @@ if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
     try:
-        from UI.modern_theme import ModernTheme
-        ModernTheme.apply(app, mode="dark", base_point_size=11, rtl=False)
+        from UI.design_system import apply_global_theme, apply_window_backdrop
+        apply_global_theme(app, base_point_size=11)
     except Exception:
         app.setStyle("Fusion")
     w = ExtractionTab(); w.resize(1100, 720); w.show()
+    try:
+        from UI.design_system import apply_window_backdrop
+        apply_window_backdrop(w, prefer_mica=True)
+    except Exception:
+        pass
     sys.exit(app.exec_())

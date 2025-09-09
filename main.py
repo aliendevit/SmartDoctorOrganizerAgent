@@ -2,6 +2,7 @@
 import sys, warnings, importlib, traceback
 from pathlib import Path
 from PyQt5 import QtWidgets, QtCore, QtGui
+from UI import design_system  # NEW
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -121,7 +122,7 @@ class Notifier(QtCore.QObject):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MedicalDoc AI Demo v 1.9.3")
+        self.setWindowTitle("MedicalDoc AI Demo v 1.9.5")
         self.resize(1200, 800)
 
         self.tray_icon = QtWidgets.QSystemTrayIcon(self)
@@ -143,10 +144,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ---- persistence ----
     def _load_settings(self):
-        s = QtCore.QSettings("YourOrg", "MedicalDocAI Demo v1.9.3")
+        s = QtCore.QSettings("Innova", "MedicalDocAI Demo v1.9.5")
         g = s.value("main/geometry");  self.restoreGeometry(g) if g else None
     def _save_settings(self):
-        s = QtCore.QSettings("YourOrg", "MedicalDocAI Demo v1.9.3")
+        s = QtCore.QSettings("Innova", "MedicalDocAI Demo v1.9.5")
         s.setValue("main/geometry", self.saveGeometry())
     def closeEvent(self, e: QtGui.QCloseEvent):
         self._save_settings(); super().closeEvent(e)
@@ -301,12 +302,27 @@ class MainWindow(QtWidgets.QMainWindow):
 
 def main():
     QtCore.QCoreApplication.setOrganizationName("InnovationLabs")
-    QtCore.QCoreApplication.setApplicationName("MedicalDocAI TESTversion v1.9.5")
+    QtCore.QCoreApplication.setApplicationName("MedicalDocAI")
+
     app = QtWidgets.QApplication(sys.argv)
-    apply_theme(app)
-    win = MainWindow(); win.show()
-    try: win.notifier.info("MedicalDoc AI TESTversion v 1.9.3", "Ready.")
-    except Exception: pass
+
+    # Apply global glassy theme once
+    design_system.apply_global_theme(app, base_point_size=11)
+
+    win = MainWindow()
+    win.show()
+
+    # Optional: enable Windows Mica/Acrylic
+    try:
+        design_system.apply_window_backdrop(win, prefer_mica=True)
+    except Exception as e:
+        print("Backdrop:", e)
+
+    try:
+        win.notifier.info("MedicalDoc AI", "Ready.")
+    except Exception:
+        pass
+
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
