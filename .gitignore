@@ -1,37 +1,26 @@
 # Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-.env
-.venv/
-venv/
-ENV/
-*.egg-info/
-dist/
-build/
 
-# PyCharm / VSCode
+# Virtual env
+.venv/
+
+# Build / dist output
+build/
+dist/
+*.spec
+*.pkg
+*.exe
+*.msi
+*.zip
+
+# IDE
 .idea/
 .vscode/
 
-# OS junk
-.DS_Store
-Thumbs.db
-
-# App data / caches
+# Databases / local data
+*.db
+reports/json/*.json
 json/*.json
-logs/
-cache/
-
-# Models (huge; do NOT commit)
-models/
-*.bin
-*.gguf
-*.pt
-*.safetensors
-*.onnx
-
-# Hugging Face cache
-**/.cache/
-*.lock
+monthly_receipts_archive.json
+translations.json
