@@ -1,0 +1,29 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install SQLCipher
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sqlcipher libsqlcipher-dev
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Create .env
+        run: |
+          echo "APP_ENV=test" >> .env
+          echo "DB_KEY=ThisIsOnlyForCI_DoNotUseInProd" >> .env
+          echo "DB_PATH=/home/runner/work/${{ github.repository }}/test_clients.db" >> .env
+          echo "AUDIT_DB_PATH=/home/runner/work/${{ github.repository }}/test_audit.db" >> .env
+      - name: Run tests
+        run: pytest --cov=app --maxfail=1 -q

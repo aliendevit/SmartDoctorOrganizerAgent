@@ -9,6 +9,8 @@ from typing import Callable, Dict, List, Tuple
 
 from PyQt5 import QtWidgets, QtCore, QtGui
 
+__all__ = ["ExtractionTab"]
+
 # ---------- Global design tokens (safe fallback if design_system not present)
 try:
     from UI.design_system import COLORS as DS_COLORS
@@ -33,7 +35,19 @@ except Exception:
     colors = getSampleStyleSheet = None
 
 import speech_recognition as sr
-from utils.app_paths import reports_dir
+
+# Try to import reports_dir; if missing, fall back to Desktop/reports
+try:
+    from utils.app_paths import reports_dir
+    def _reports_dir() -> str:
+        path = reports_dir()
+        os.makedirs(path, exist_ok=True)
+        return path
+except Exception:
+    def _reports_dir() -> str:
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        path = os.path.join(desktop, "reports"); os.makedirs(path, exist_ok=True)
+        return path
 
 # ---------- Optional SmartExtractor ----------
 _EXTRACTOR = None
@@ -447,11 +461,6 @@ class Agent(QtCore.QObject):
         self.log.emit("Agent: plan complete")
         return ctx
 
-def _reports_dir() -> str:
-    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-    path = os.path.join(desktop, "reports"); os.makedirs(path, exist_ok=True)
-    return path
-
 def action_insert_db(ctx: Dict) -> Tuple[Dict, List[str]]:
     lines = ["Writing patient to database…"]
     try:
@@ -605,6 +614,28 @@ class _AgentWorker(QtCore.QThread):
             self.failed.emit(str(e))
 
 # ====================== Main Extraction Tab ======================
+def parse_patient_info(text: str) -> Dict:  # (already defined above; keep order if you prefer)
+    if _EXTRACTOR:
+        try:
+            data = _EXTRACTOR.extract(text) or {}
+            data = dict(data)
+            data.setdefault("Name", "Unknown")
+            data.setdefault("Date", _today_str())
+            ad = data.get("Appointment Date") or "Not Specified"
+            at = data.get("Appointment Time") or "Not Specified"
+            ad = _safe_dt_parse(ad) if ad not in ("", None, "Not Specified") else "Not Specified"
+            at = _norm_time(at) if at not in ("", None, "Not Specified") else "Not Specified"
+            data["Appointment Date"] = ad
+            data["Appointment Time"] = at
+            data.setdefault("Summary", "—")
+            data.setdefault("Follow-Up Date", "Not Specified")
+            data.setdefault("Symptoms", data.get("Symptoms") or [])
+            data.setdefault("Notes", data.get("Notes") or "")
+            return data
+        except Exception:
+            pass
+    return _fallback_parse_patient_info(text)
+
 class ExtractionTab(QtWidgets.QWidget):
     dataProcessed = QtCore.pyqtSignal(dict)
     appointmentProcessed = QtCore.pyqtSignal(dict)

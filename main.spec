@@ -36,3 +36,16 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+# In .spec (Analysis section), add:
+hiddenimports = [
+    "MedicalDocAi.Tabs.extraction_tab",
+    "MedicalDocAi.Tabs.dashboard_tab",
+    "MedicalDocAi.Tabs.appointment_tab",
+    "MedicalDocAi.Tabs.account_tab",
+    "MedicalDocAi.Tabs.clients_stats_tab",
+    "MedicalDocAi.model_intent.chatbot_tab",
+    "MedicalDocAi.features.translation_helper",
+    "MedicalDocAi.UI.design_system",
+    "MedicalDocAi.UI.modern_theme",
+]
+
