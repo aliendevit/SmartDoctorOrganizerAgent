@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Any
 from PyQt5 import QtWidgets, QtCore, QtGui
 from dateparser.search import search_dates  # noqa: F401 (kept for future use)
 import dateparser
+from UI.icons import icon  # new
 
 # ---------------- Local LLM client (Gemma) ----------------
 HAVE_LLM = False
@@ -363,20 +364,24 @@ class ChatBotTab(QtWidgets.QWidget):
         qa = QtWidgets.QGridLayout(qa_card); qa.setContentsMargins(10, 10, 10, 10); qa.setHorizontalSpacing(8); qa.setVerticalSpacing(8)
 
         chips = [
-            ("📅 Show appointments", "List all appointments.", "show my appointments"),
-            ("➕ Book: Jane, Fri 10:30 AM", "Books an appointment (you can edit text before sending with Shift).",
-             "book appointment for Jane Smith on Friday at 10:30 AM"),
-            ("💳 Update payment (John, 200)", "Update a patient’s payment.",
-             "update payment for John Doe to 200"),
-            ("📊 Client stats", "Open the client statistics dashboard.", "show client stats"),
-            ("🕒 What time is it?", "Ask for current date/time.", "what is the time now?"),
-            ("🧮 Calculate 12.5*(3+2)", "Quick calculator.", "calc 12.5*(3+2)"),
-            ("📝 Draft report (Mary)", "Ask to draft a quick report.", "create report for Mary Johnson"),
-            ("👋 Hello", "Friendly greeting.", "hello"),
+            ("calendar", "Show appointments", "show my appointments"),
+            ("plus", "Book: Jane, Fri 10:30 AM", "book appointment for Jane Smith on Friday at 10:30 AM"),
+            ("payment", "Update payment (John, 200)", "update payment for John Doe to 200"),
+            ("stats", "Client stats", "show client stats"),
+            ("time", "What time is it?", "what is the time now?"),
+            ("calc", "Calculate 12.5*(3+2)", "calc 12.5*(3+2)"),
+            ("report", "Draft report (Mary)", "create report for Mary Johnson"),
+            ("chat", "Hello", "hello"),
         ]
+
         cols = 4
-        for i, (label, tip, payload) in enumerate(chips):
-            btn = self._make_chip(label, payload, tip)
+        for i, (key, label, payload) in enumerate(chips):
+            btn = self._make_chip(label, payload, tooltip="")
+            btn.setIcon(icon({
+                                 "calendar": "appointments", "plus": "appointments", "payment": "payment",
+                                 "stats": "stats", "time": "time", "calc": "calc", "report": "report", "chat": "chat"
+                             }.get(key, "dashboard"), size=16, color="#0f172a"))
+            btn.setIconSize(QtCore.QSize(16, 16))
             qa.addWidget(btn, i // cols, i % cols)
 
         root.addWidget(qa_card)
