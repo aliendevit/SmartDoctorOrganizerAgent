@@ -463,7 +463,7 @@ if __name__ == "__main__":
     except Exception:
         pass
     win = QtWidgets.QMainWindow()
-    win.setWindowTitle("MedicalDocAI – Home (Chat on Right)")
+    win.setWindowTitle("MedicalDOC.AI – V1.9.9demo")
     page = HomePage()
     win.setCentralWidget(page)
     win.resize(1200, 760)

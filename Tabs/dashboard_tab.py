@@ -1,5 +1,4 @@
-# dashboard_tab.py — Glass-matched Practice Dashboard
-# (keeps original behavior; only styling and small UI polish changed)
+# dashboard_tab.py — Glass-matched Practice Dashboard (full file)
 
 import csv
 import json
@@ -7,7 +6,7 @@ import os
 from typing import List, Dict
 
 from PyQt5 import QtWidgets, QtCore, QtGui
-from PyQt5.QtCore import QDate
+from PyQt5.QtCore import QDate, QStandardPaths
 
 # ---- Global design tokens (safe fallback) -----------------------------------
 try:
@@ -21,6 +20,16 @@ except Exception:
         "stripe": "rgba(240,247,255,0.65)", "selBg": "#3A8DFF", "selFg": "#ffffff",
     }
 
+# ---- Settings (optional) -----------------------------------------------------
+try:
+    from core import app_settings as AS
+except Exception:
+    AS = None
+
+_CSYM = {"USD":"$", "EUR":"€", "GBP":"£", "JPY":"¥", "AUD":"$", "CAD":"$", "INR":"₹"}
+def _sym(code: str) -> str:
+    return _CSYM.get((code or "").upper(), code or "$")
+
 # ---- Robust data access ------------------------------------------------------
 def _load_all_clients_safe() -> List[Dict]:
     try:
@@ -29,9 +38,14 @@ def _load_all_clients_safe() -> List[Dict]:
     except Exception:
         return []
 
-# ---- Archive path ------------------------------------------------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ARCHIVE_FILE = os.path.normpath(os.path.join(BASE_DIR, "..", "json", "monthly_receipts_archive.json"))
+# ---- Archive path (portable) -------------------------------------------------
+def _archive_file_path() -> str:
+    base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation) or os.path.expanduser("~")
+    folder = os.path.join(base, "MedicalDocAI", "archives")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, "monthly_receipts_archive.json")
+
+ARCHIVE_FILE = _archive_file_path()
 
 # ---- Small helpers -----------------------------------------------------------
 def _polish(*widgets):
@@ -56,9 +70,6 @@ def _to_float(v) -> float:
     except Exception:
         return 0.0
 
-def _ensure_archive_dir():
-    os.makedirs(os.path.dirname(ARCHIVE_FILE), exist_ok=True)
-
 # -----------------------------------------------------------------------------
 
 
@@ -68,6 +79,15 @@ class DashboardTab(QtWidgets.QWidget):
         self._all_clients_cache: List[Dict] = []
         self._outstanding_cache: List[Dict] = []
         self._session_settings = QtCore.QSettings("YourOrg", "MedicalDocAI Demo v1.9.3")
+
+        # currency from settings (optional)
+        self._currency = "USD"
+        if AS:
+            try:
+                cfg = AS.read_all()
+                self._currency = str(cfg.get("bill/currency", "USD"))
+            except Exception:
+                pass
 
         self._build_ui()
         self._load_persisted_period()
@@ -90,7 +110,7 @@ class DashboardTab(QtWidgets.QWidget):
         h.addWidget(self.title)
         h.addStretch(1)
 
-        # presets – ghost style with subtle check state
+        # presets – ghost style with subtle check state (i18n-proof via ids)
         self.btn_7d   = QtWidgets.QPushButton(_tr("7d"))
         self.btn_30d  = QtWidgets.QPushButton(_tr("30d"))
         self.btn_90d  = QtWidgets.QPushButton(_tr("90d"))
@@ -99,13 +119,14 @@ class DashboardTab(QtWidgets.QWidget):
             b.setProperty("accent", "slate")
             b.setCheckable(True)
             h.addWidget(b)
-        self.btn_30d.setChecked(True)
         _polish(self.btn_7d, self.btn_30d, self.btn_90d, self.btn_365d)
 
         self._preset_group = QtWidgets.QButtonGroup(self)
-        for b in (self.btn_7d, self.btn_30d, self.btn_90d, self.btn_365d):
-            self._preset_group.addButton(b)
-        self._preset_group.buttonClicked.connect(self._apply_preset_days)
+        self._preset_group.addButton(self.btn_7d,    7)
+        self._preset_group.addButton(self.btn_30d,  30)
+        self._preset_group.addButton(self.btn_90d,  90)
+        self._preset_group.addButton(self.btn_365d,365)
+        self._preset_group.buttonClicked[int].connect(self._apply_preset_days)
 
         self.period_label = QtWidgets.QLabel(_tr("Days:"))
         self.inventory_days_spinbox = QtWidgets.QSpinBox()
@@ -131,7 +152,7 @@ class DashboardTab(QtWidgets.QWidget):
         left = QtWidgets.QWidget()
         l = QtWidgets.QVBoxLayout(left); l.setContentsMargins(0, 0, 0, 0); l.setSpacing(12)
 
-        # KPI tiles grid (2x2) - glassy cards with accent strip
+        # KPI tiles grid (2x2)
         kpi_card = QtWidgets.QFrame(); kpi_card.setProperty("modernCard", True)
         kg = QtWidgets.QGridLayout(kpi_card)
         kg.setContentsMargins(12, 12, 12, 12); kg.setHorizontalSpacing(10); kg.setVerticalSpacing(10)
@@ -228,8 +249,12 @@ class DashboardTab(QtWidgets.QWidget):
 
         self.outstanding_table = QtWidgets.QTableWidget()
         self.outstanding_table.setColumnCount(4)
+        sym = _sym(self._currency)
         self.outstanding_table.setHorizontalHeaderLabels([
-            _tr("Name"), _tr("Total Amount"), _tr("Total Paid"), _tr("Outstanding")
+            _tr("Name"),
+            f"{_tr('Total Amount')} ({sym})",
+            f"{_tr('Total Paid')} ({sym})",
+            f"{_tr('Outstanding')} ({sym})"
         ])
         self.outstanding_table.horizontalHeader().setStretchLastSection(True)
         self.outstanding_table.verticalHeader().setVisible(False)
@@ -282,9 +307,21 @@ class DashboardTab(QtWidgets.QWidget):
         self.setStyleSheet(self._tab_qss())
 
         # ---- Shortcuts ----
-        QtWidgets.QShortcut(QtGui.QKeySequence("F5"),     self, activated=self.refresh_data)
-        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+E"), self, activated=self._export_outstanding_csv)
-        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+C"), self, activated=self._copy_selected_row)
+        QtWidgets.QShortcut(QtGui.QKeySequence("F5"),              self, activated=self.refresh_data)
+        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+E"),          self, activated=self._export_outstanding_csv)
+        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+C"),          self, activated=self._copy_selected_row)
+        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+F"),          self, activated=self.search_line.setFocus)
+        QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+Shift+E"),    self, activated=self._export_outstanding_csv)
+
+        # ---- Persist column widths ----
+        self.outstanding_table.horizontalHeader().sectionResized.connect(
+            lambda *_: self._save_table_widths(self.outstanding_table, "dash/out_cols")
+        )
+        self.archive_table.horizontalHeader().sectionResized.connect(
+            lambda *_: self._save_table_widths(self.archive_table, "dash/arc_cols")
+        )
+        QtCore.QTimer.singleShot(0, lambda: self._restore_table_widths(self.outstanding_table, "dash/out_cols"))
+        QtCore.QTimer.singleShot(0, lambda: self._restore_table_widths(self.archive_table, "dash/arc_cols"))
 
     # ---------------- Tab QSS ----------------
     def _tab_qss(self) -> str:
@@ -383,15 +420,23 @@ class DashboardTab(QtWidgets.QWidget):
 
     # ---------------- Data / Logic ----------------
     def _on_days_changed(self, val: int):
-        self._persist_period(val); self.refresh_data()
+        # update preset check state to match standard presets, or none for custom
+        btn = self._preset_group.button(val)
+        self._preset_group.blockSignals(True)
+        for b in (self.btn_7d, self.btn_30d, self.btn_90d, self.btn_365d):
+            b.setChecked(False)
+        if btn:
+            btn.setChecked(True)
+        self._preset_group.blockSignals(False)
 
-    def _apply_preset_days(self, btn: QtWidgets.QAbstractButton):
-        text = btn.text().lower()
-        mapping = {"7d": 7, "30d": 30, "90d": 90, "365d": 365}
+        self._persist_period(val)
+        self.refresh_data()
+
+    def _apply_preset_days(self, days: int):
         self.inventory_days_spinbox.blockSignals(True)
-        self.inventory_days_spinbox.setValue(mapping.get(text, 30))
+        self.inventory_days_spinbox.setValue(days)
         self.inventory_days_spinbox.blockSignals(False)
-        self._persist_period(self.inventory_days_spinbox.value())
+        self._persist_period(days)
         self.refresh_data()
 
     def _persist_period(self, days: int):
@@ -404,9 +449,9 @@ class DashboardTab(QtWidgets.QWidget):
         except Exception:
             days = 30
         self.inventory_days_spinbox.setValue(days)
-        mapping = {7: self.btn_7d, 30: self.btn_30d, 90: self.btn_90d, 365: self.btn_365d}
-        if days in mapping:
-            mapping[days].setChecked(True)
+        btn = self._preset_group.button(days)
+        if btn:
+            btn.setChecked(True)
         else:
             for b in (self.btn_7d, self.btn_30d, self.btn_90d, self.btn_365d):
                 b.setChecked(False)
@@ -535,7 +580,6 @@ class DashboardTab(QtWidgets.QWidget):
             )
 
     def archive_current_period(self):
-        _ensure_archive_dir()
         days = int(self.inventory_days_spinbox.value())
         end_date = QDate.currentDate()
         start_date = end_date.addDays(-days)
@@ -667,6 +711,22 @@ class DashboardTab(QtWidgets.QWidget):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, _tr("Export"), _tr("Error: ") + str(e))
 
+    # ---------------- Column width persistence ----------------
+    def _save_table_widths(self, table: QtWidgets.QTableWidget, key: str):
+        s = self._settings()
+        s.setValue(key, [table.columnWidth(c) for c in range(table.columnCount())])
+
+    def _restore_table_widths(self, table: QtWidgets.QTableWidget, key: str):
+        s = self._settings()
+        widths = s.value(key)
+        if isinstance(widths, list) and len(widths) == table.columnCount():
+            for c, w in enumerate(widths):
+                try: table.setColumnWidth(c, int(w))
+                except Exception: pass
+
+    def _settings(self):
+        return QtCore.QSettings("YourOrg", "MedicalDocAI Demo v1.9.3")
+
     # ---------------- i18n refresh ----------------
     def retranslateUi(self):
         self.title.setText(_tr("Practice Dashboard"))
@@ -681,8 +741,12 @@ class DashboardTab(QtWidgets.QWidget):
         self.archive_button.setText(_tr("Archive Inventory"))
 
         self.outstanding_label.setText(_tr("Loading outstanding payments..."))
+        sym = _sym(self._currency)
         self.outstanding_table.setHorizontalHeaderLabels([
-            _tr("Name"), _tr("Total Amount"), _tr("Total Paid"), _tr("Outstanding")
+            _tr("Name"),
+            f"{_tr('Total Amount')} ({sym})",
+            f"{_tr('Total Paid')} ({sym})",
+            f"{_tr('Outstanding')} ({sym})"
         ])
         self.refresh_outstanding_btn.setText(_tr("Refresh"))
 

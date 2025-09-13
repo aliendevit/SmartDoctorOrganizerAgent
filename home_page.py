@@ -274,7 +274,7 @@ class HomePage(QtWidgets.QWidget):
 
         # Top bar
         topbar = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel("MedicalDocAI")
+        title = QtWidgets.QLabel("MedicalDOC.AI")
         tf = QtGui.QFont(); tf.setFamilies(["Segoe UI Variable","Segoe UI","Inter","Arial"])
         tf.setPointSize(18); tf.setWeight(QtGui.QFont.DemiBold); title.setFont(tf)
         topbar.addWidget(title); topbar.addStretch(1)
@@ -487,7 +487,7 @@ if __name__ == "__main__":
         pass
 
     win = QtWidgets.QMainWindow()
-    win.setWindowTitle("MedicalDocAI – Home (In-Place Navigation)")
+    win.setWindowTitle("MedicalDOC.AI – V1.9.9.3")
     win.resize(1200, 760)
     page = HomePage()
     win.setCentralWidget(page)
