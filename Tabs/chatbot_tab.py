@@ -720,6 +720,19 @@ class ChatBotTab(QtWidgets.QWidget):
         self.btn_send.setText(self.tr("Send"))
         self.btn_stop.setText(self.tr("Stop"))
 
+    # ---------- cmodel config ----------
+    # in ChatBotTab
+    def set_model_config(self, cfg: dict):
+        try:
+            # Store in instance; your hf_client/chat_stream can read these when invoked
+            self._model_path = cfg.get("model_path", "")
+            self._gen_cfg_override = {
+                "max_new_tokens": int(cfg.get("max_new_tokens", 240)),
+                "temperature": float(cfg.get("temperature", 0.6)),
+            }
+        except Exception:
+            pass
+
     # ---------- chip helper ----------
     def _make_chip(self, label: str, payload: str, tooltip: str = "") -> QtWidgets.QPushButton:
         btn = QtWidgets.QPushButton(label)

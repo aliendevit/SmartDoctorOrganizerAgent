@@ -1,10 +1,10 @@
-# client_stats_tab.py  — Glass-matched Client Analytics tab
+# Tabs/client_stats_tab.py  — Glass-matched Client Analytics tab (settings-aware)
 from __future__ import annotations
 import csv
 import math
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as dt_date
 from typing import List, Dict, Tuple, Optional
 
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -16,6 +16,17 @@ def _tr(s: str) -> str:
         return tr(s)
     except Exception:
         return s
+
+# ---------- app settings & live bus (safe fallbacks) ----------
+try:
+    from core import app_settings as AS  # read_all(), ORG/APP
+except Exception:
+    AS = None
+
+try:
+    from core.settings_bus import BUS  # Qt signal: settingsApplied(dict)
+except Exception:
+    BUS = None
 
 # ---------- data layer (safe) ----------
 try:
@@ -75,15 +86,14 @@ _RED_FLAG_TERMS = {
 }
 
 # ---------- helpers ----------
-def _to_date(d: str) -> Optional[datetime.date]:
-    if not d:
-        return None
-    for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(d.strip(), fmt).date()
-        except Exception:
-            pass
-    return None
+_CURRENCY_SYMBOLS = {
+    "USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥",
+    "AUD": "$", "CAD": "$", "INR": "₹", "SAR": "﷼", "AED": "د.إ",
+}
+
+def _currency_symbol(code: str) -> str:
+    c = (code or "").upper().strip()
+    return _CURRENCY_SYMBOLS.get(c, c or "$")
 
 def _to_float(x) -> float:
     try:
@@ -143,7 +153,7 @@ class KPIBox(QtWidgets.QFrame):
         super().__init__(parent)
         self.setProperty("kpiCard", True)
         self.setProperty("accent", {
-            "info": "teal", "success": "purple",  # backwards-compat accents
+            "info": "teal", "success": "purple",
             "warning": "warning", "danger": "danger", "violet": "purple"
         }.get(accent, accent))
 
@@ -182,9 +192,31 @@ class ClientStatsTab(QtWidgets.QWidget):
     """
     def __init__(self, parent=None):
         super().__init__(parent)
+
+        # settings cache (defaults)
+        self._date_fmt = "dd-MM-yyyy"   # Qt format
+        self._rtl = False
+        self._currency = "USD"
+        self._clinic_name = ""
+
         self.clients: List[Dict] = []
         self.appts:   List[Dict] = []
+
+        # UI
         self._build_ui()
+
+        # initial settings
+        if AS:
+            try:
+                self.apply_settings(AS.read_all())
+            except Exception:
+                pass
+
+        # live settings
+        if BUS:
+            BUS.settingsApplied.connect(self.apply_settings)
+
+        # data
         self.refresh_data()
 
     # ---------- UI ----------
@@ -280,7 +312,6 @@ class ClientStatsTab(QtWidgets.QWidget):
             cv.setContentsMargins(10, 18, 10, 10)
             self.fig = Figure(figsize=(5, 3), tight_layout=True)
             self.canvas = FigureCanvas(self.fig)
-            # transparent canvas styling
             try:
                 self.canvas.setStyleSheet("background: transparent;")
                 self.fig.patch.set_alpha(0.0)
@@ -385,7 +416,6 @@ class ClientStatsTab(QtWidgets.QWidget):
         """
 
     def _make_groupbox_css(self) -> str:
-        # Glassy group boxes with DPI-safe title area
         fm = QtGui.QFontMetrics(self.font())
         title_h = fm.height()
         margin_top = title_h + 12
@@ -405,12 +435,63 @@ class ClientStatsTab(QtWidgets.QWidget):
     def _group(self, title: str) -> QtWidgets.QGroupBox:
         gb = QtWidgets.QGroupBox(title); gb.setStyleSheet(self._groupbox_css); return gb
 
+    # ---------- settings ----------
+    def apply_settings(self, cfg: Dict[str, object]):
+        try:
+            # RTL
+            self._rtl = str(cfg.get("lang/rtl", False)).lower() in ("1","true","yes")
+            self.setLayoutDirection(QtCore.Qt.RightToLeft if self._rtl else QtCore.Qt.LeftToRight)
+
+            # clinic name
+            self._clinic_name = str(cfg.get("clinic/name", "")).strip()
+
+            # currency (affects labels/CSV)
+            self._currency = str(cfg.get("bill/currency", self._currency) or self._currency)
+
+            # datetime format from settings; accept "dd-MM-yyyy hh:mm AP" or just a date format
+            fmt = str(cfg.get("clinic/datetime_fmt", self._date_fmt))
+            if " " in fmt:
+                date_fmt, _time = fmt.split(" ", 1)
+            else:
+                date_fmt = fmt
+            date_fmt = date_fmt.strip() or self._date_fmt
+            # only update if it's a valid-ish Qt format containing year token
+            if "y" in date_fmt:
+                self._date_fmt = date_fmt
+
+            # re-run with the new format so parsing is correct
+            self.refresh_data()
+        except Exception:
+            pass
+
     # ---------- data / filters ----------
     def refresh_data(self):
         self.clients = load_all_clients() or []
         self.appts   = load_appointments() or []
         self._recompute()
         self._apply_filters()
+
+    def _parse_date_cfg(self, s: str) -> Optional[dt_date]:
+        """Parse with configured Qt format first, then legacy fallbacks."""
+        if not s:
+            return None
+        txt = (s or "").strip()
+
+        # try configured Qt fmt (e.g., dd-MM-yyyy)
+        try:
+            qd = QtCore.QDate.fromString(txt, self._date_fmt)
+            if qd.isValid():
+                return qd.toPyDate()
+        except Exception:
+            pass
+
+        # legacy python strptime formats
+        for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(txt, fmt).date()
+            except Exception:
+                continue
+        return None
 
     def _recompute(self):
         today = datetime.today().date()
@@ -427,7 +508,7 @@ class ClientStatsTab(QtWidgets.QWidget):
         week = timedelta(days=7)
         for a in self.appts:
             nm = (a.get("Name") or "").strip()
-            d  = _to_date(a.get("Appointment Date") or a.get("Date"))
+            d  = self._parse_date_cfg(a.get("Appointment Date") or a.get("Date"))
             if not nm or not d: continue
             if abs(d - today) <= week:
                 active_names.add(nm)
@@ -440,7 +521,7 @@ class ClientStatsTab(QtWidgets.QWidget):
             ar_values.append(owed)
             balances.append((name, round(owed, 2), round(tot, 2)))
 
-            fu = _to_date(c.get("Follow-Up Date"))
+            fu = self._parse_date_cfg(c.get("Follow-Up Date"))
             if fu:
                 if fu >= today and (fu - today).days <= 14:
                     upcoming.append((name, fu.strftime("%d-%m-%Y"), f"{owed:.2f}"))
@@ -454,7 +535,11 @@ class ClientStatsTab(QtWidgets.QWidget):
             if _has_red_flags(c.get("Notes", "")):
                 flags.append((name, _tr("Red-flag in notes")))
 
-        upcoming.sort(key=lambda r: _to_date(r[1]) or today)
+        # sort cohorts
+        def _safe_to_date(d: str) -> dt_date:
+            return self._parse_date_cfg(d) or today
+
+        upcoming.sort(key=lambda r: _safe_to_date(r[1]))
         overdue.sort(key=lambda r: r[1], reverse=True)
         balances.sort(key=lambda r: r[1], reverse=True)
         flags.sort(key=lambda r: r[0])
@@ -463,12 +548,13 @@ class ClientStatsTab(QtWidgets.QWidget):
         active_7d = len(active_names)
         avg_ar = (sum(ar_values)/len(ar_values)) if ar_values else 0.0
 
-        # KPIs
+        # KPIs (prefix currency)
+        cur = _currency_symbol(self._currency)
         self.k_total.set(str(total_patients))
         self.k_active.set(str(active_7d), _tr("appt in last/next 7 days"))
         self.k_overdue.set(str(len(overdue)))
-        self.k_balance.set(f"{outstanding_sum:,.2f}")
-        self.k_ar.set(f"{avg_ar:,.2f}")
+        self.k_balance.set(f"{cur}{outstanding_sum:,.2f}")
+        self.k_ar.set(f"{cur}{avg_ar:,.2f}")
 
         # stash cohorts
         self._cohorts = _Cohorts(
@@ -486,15 +572,17 @@ class ClientStatsTab(QtWidgets.QWidget):
     def _apply_filters(self):
         name_q = (self.filter_name.text() or "").strip().lower()
         only_bal = self.chk_balance.isChecked()
+        cur = _currency_symbol(self._currency)
 
         def keep_name(nm: str) -> bool:
             if not name_q: return True
             return name_q in (nm or "").lower()
 
-        up = [(n,d,o) for (n,d,o) in self._cohorts.upcoming if keep_name(n) and (not only_bal or _to_float(o) > 0)]
-        ov = [(n,dd,o) for (n,dd,o) in self._cohorts.overdue  if keep_name(n) and (not only_bal or _to_float(o) > 0)]
-        hb = [(n,o,t) for (n,o,t) in self._cohorts.balances  if keep_name(n) and (not only_bal or o > 0.0)]
-        fl = [(n,r)   for (n,r)   in self._cohorts.flags     if keep_name(n)]
+        # decorate money columns with currency for display
+        up = [(n, d, f"{cur}{o}") for (n,d,o) in self._cohorts.upcoming if keep_name(n) and (not only_bal or _to_float(o) > 0)]
+        ov = [(n, dd, f"{cur}{o}") for (n,dd,o) in self._cohorts.overdue  if keep_name(n) and (not only_bal or _to_float(o) > 0)]
+        hb = [(n, f"{cur}{o:.2f}", f"{cur}{t:.2f}") for (n,o,t) in self._cohorts.balances if keep_name(n) and (not only_bal or o > 0.0)]
+        fl = [(n,r) for (n,r) in self._cohorts.flags if keep_name(n)]
 
         self.tbl_due.populate(up[:100])
         self.tbl_over.populate(ov[:100])
@@ -521,7 +609,7 @@ class ClientStatsTab(QtWidgets.QWidget):
         start = today - timedelta(days=7*8)
         week_buckets: Dict[str,int] = {}
         for a in self.appts:
-            d = _to_date(a.get("Appointment Date") or a.get("Date"))
+            d = self._parse_date_cfg(a.get("Appointment Date") or a.get("Date"))
             if not d or d < start: continue
             y, w, _ = d.isocalendar()
             key = f"{y}-W{w:02d}"
@@ -543,7 +631,13 @@ class ClientStatsTab(QtWidgets.QWidget):
             self.filter_name.setText(nm)
 
     def _export_csv(self):
-        base = os.path.join(_desktop_path(), "cohorts_export.csv")
+        cur = _currency_symbol(self._currency)
+        base_name = "cohorts_export"
+        if self._clinic_name:
+            safe = "".join(ch for ch in self._clinic_name if ch.isalnum() or ch in (" ", "-", "_")).strip().replace(" ", "_")
+            if safe:
+                base_name = f"{safe}_cohorts"
+        base = os.path.join(_desktop_path(), f"{base_name}.csv")
         try:
             with open(base, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
@@ -555,7 +649,7 @@ class ClientStatsTab(QtWidgets.QWidget):
                 for r in range(self.tbl_over.rowCount()):
                     w.writerow([self.tbl_over.item(r,0).text(), self.tbl_over.item(r,1).text(), self.tbl_over.item(r,2).text()])
                 w.writerow([])
-                w.writerow(["HIGHEST BALANCES"]); w.writerow(["Name","Owed","Total Amount"])
+                w.writerow(["HIGHEST BALANCES"]); w.writerow([f"Name","Owed ({cur})","Total Amount ({cur})"])
                 for r in range(self.tbl_bal.rowCount()):
                     w.writerow([self.tbl_bal.item(r,0).text(), self.tbl_bal.item(r,1).text(), self.tbl_bal.item(r,2).text()])
                 w.writerow([])
@@ -568,16 +662,27 @@ class ClientStatsTab(QtWidgets.QWidget):
 
     # ---------- i18n ----------
     def retranslateUi(self):
-        # rebuild with translated strings
-        self._build_ui()
-        self.refresh_data()
+        # For simplicity, rebuild headers and strings in place
+        self.tbl_due.setHorizontalHeaderLabels([_tr("Name"), _tr("Follow-Up Date"), _tr("Owed")])
+        self.tbl_over.setHorizontalHeaderLabels([_tr("Name"), _tr("Days Overdue"), _tr("Owed")])
+        self.tbl_bal.setHorizontalHeaderLabels([_tr("Name"), _tr("Owed"), _tr("Total Amt")])
+        self.tbl_symptoms.setHorizontalHeaderLabels([_tr("Symptom"), _tr("Count")])
+        self.btn_export.setText(_tr("Export Cohorts (CSV)"))
+        self.refresh_btn.setText(_tr("Refresh"))
+        self.filter_name.setPlaceholderText(_tr("Filter by patient name…"))
+        self.chk_balance.setText(_tr("Only with balance > 0"))
+        self.k_total.title.setText(_tr("Total Patients"))
+        self.k_active.title.setText(_tr("Active (±7d)")); self.k_active.hint.setText(_tr("appt in last/next 7 days"))
+        self.k_overdue.title.setText(_tr("Overdue Follow-ups"))
+        self.k_balance.title.setText(_tr("Outstanding Balance"))
+        self.k_ar.title.setText(_tr("Avg. A/R per Patient"))
+        # keep current numeric values
 
 # ---- standalone run ----
 if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
     try:
-        # If you have the global theme, apply it
         from UI.design_system import apply_global_theme, apply_window_backdrop
         apply_global_theme(app, base_point_size=11)
     except Exception:

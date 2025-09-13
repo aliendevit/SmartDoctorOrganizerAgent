@@ -1,9 +1,8 @@
-# appointment_tab.py — Glass-matched Appointments (senior pass)
+# Tabs/appointment_tab.py — Glass-matched Appointments (settings-aware)
 
 from PyQt5 import QtWidgets, QtCore, QtGui
-from datetime import datetime
+from datetime import datetime, time as dt_time
 import csv
-import os
 
 # -------- design tokens (safe fallback) --------
 try:
@@ -17,6 +16,17 @@ except Exception:
         "panelInner": "rgba(255,255,255,0.65)", "inputBg": "rgba(255,255,255,0.88)",
         "stripe": "rgba(240,247,255,0.65)", "selBg": "#3A8DFF", "selFg": "#ffffff",
     }
+
+# -------- app settings / live bus (safe fallbacks) --------
+try:
+    from core import app_settings as AS
+except Exception:
+    AS = None  # graceful if missing
+
+try:
+    from core.settings_bus import BUS  # signal: settingsApplied(dict)
+except Exception:
+    BUS = None
 
 # -------- data backend (safe fallbacks) --------
 try:
@@ -53,16 +63,6 @@ def _tr(text: str) -> str:
     except Exception:
         return text
 
-def _qdate_from_str(s: str) -> QtCore.QDate:
-    for fmt in ("dd-MM-yyyy", "yyyy-MM-dd"):
-        d = QtCore.QDate.fromString((s or "").strip(), fmt)
-        if d.isValid():
-            return d
-    return QtCore.QDate()
-
-def _now_ddmmyyyy():
-    return QtCore.QDate.currentDate().toString("dd-MM-yyyy")
-
 def _boolish(val) -> bool:
     t = str(val).strip().lower()
     return t in ("true", "1", "yes", "on")
@@ -71,7 +71,7 @@ def _boolish(val) -> bool:
 class StatusChipDelegate(QtWidgets.QStyledItemDelegate):
     """Paints status as a rounded chip (keeps selection highlight underneath)."""
     COLORS = {
-        "Scheduled": ("#0b5394", "rgba(11,83,148,0.14)"),   # deep blue fg, soft bg
+        "Scheduled": ("#0b5394", "rgba(11,83,148,0.14)"),
         "Completed": ("#166534", "rgba(22,101,52,0.14)"),
         "Canceled":  ("#b91c1c", "rgba(185,28,28,0.14)"),
         "No Show":   ("#92400e", "rgba(146,64,14,0.14)"),
@@ -81,7 +81,6 @@ class StatusChipDelegate(QtWidgets.QStyledItemDelegate):
         if not status:
             return super().paint(painter, option, index)
 
-        # Selection underlay to keep platform highlight behavior
         if option.state & QtWidgets.QStyle.State_Selected:
             painter.save()
             painter.fillRect(option.rect, option.palette.highlight())
@@ -124,12 +123,14 @@ class CheckBoxDelegate(QtWidgets.QStyledItemDelegate):
 
 # -------- dialog --------
 class AppointmentDialog(QtWidgets.QDialog):
-    """Add/Edit appointment dialog with past-time confirmation."""
-    def __init__(self, parent=None, data: dict=None):
+    """Add/Edit appointment dialog with past-time confirmation (format-aware)."""
+    def __init__(self, parent=None, data: dict=None, *, date_fmt: str = "dd-MM-yyyy", time_fmt: str = "hh:mm AP"):
         super().__init__(parent)
         self.setWindowTitle(_tr("Appointment"))
         self.setModal(True)
         self._data = dict(data or {})
+        self._date_fmt = date_fmt or "dd-MM-yyyy"
+        self._time_fmt = time_fmt or "hh:mm AP"
         self._build()
         self._apply_style()
 
@@ -137,15 +138,25 @@ class AppointmentDialog(QtWidgets.QDialog):
         f = QtWidgets.QFormLayout(self); f.setContentsMargins(12, 12, 12, 12); f.setSpacing(8)
 
         self.e_name = QtWidgets.QLineEdit(self._data.get("Name",""))
+
+        # Date
         self.e_date = QtWidgets.QDateEdit(QtCore.QDate.currentDate())
-        self.e_date.setCalendarPopup(True); self.e_date.setDisplayFormat("dd-MM-yyyy")
-        d = _qdate_from_str(self._data.get("Appointment Date",""))
+        self.e_date.setCalendarPopup(True); self.e_date.setDisplayFormat(self._date_fmt)
+        d_raw = (self._data.get("Appointment Date","") or "").strip()
+        d = QtCore.QDate.fromString(d_raw, self._date_fmt)
+        if not d.isValid():
+            # Try a couple of fallbacks if data stored with legacy formats
+            for legacy in ("dd-MM-yyyy", "yyyy-MM-dd"):
+                d = QtCore.QDate.fromString(d_raw, legacy)
+                if d.isValid(): break
         if d.isValid(): self.e_date.setDate(d)
 
+        # Time
         self.e_time = QtWidgets.QTimeEdit(QtCore.QTime.currentTime())
-        self.e_time.setDisplayFormat("hh:mm AP")
+        self.e_time.setDisplayFormat(self._time_fmt)
         t_str = (self._data.get("Appointment Time","") or "").strip()
         if t_str:
+            # try a few common patterns
             for fmt in ("%I:%M %p", "%H:%M"):
                 try:
                     dt = datetime.strptime(t_str, fmt)
@@ -205,8 +216,8 @@ class AppointmentDialog(QtWidgets.QDialog):
     def data(self) -> dict:
         return {
             "Name": self.e_name.text().strip() or "Unknown",
-            "Appointment Date": self.e_date.date().toString("dd-MM-yyyy"),
-            "Appointment Time": self.e_time.time().toString("hh:mm AP"),
+            "Appointment Date": self.e_date.date().toString(self._date_fmt),
+            "Appointment Time": self.e_time.time().toString(self._time_fmt),
             "Status": self.e_status.currentText(),
             "Notes": self.e_notes.toPlainText().strip(),
             "Remind": self.e_remind.isChecked(),
@@ -218,15 +229,45 @@ class AppointmentTab(QtWidgets.QWidget):
 
     def __init__(self, parent=None, tray_icon: QtWidgets.QSystemTrayIcon=None):
         super().__init__(parent)
+
+        # ---- settings cache with sane defaults ----
+        self._toasts_enabled = True
+        self._date_fmt = "dd-MM-yyyy"
+        self._time_fmt = "hh:mm AP"
+        self._default_len = 30
+        self._day_start = "07:00"
+        self._day_end = "21:00"
+        self._week_starts = "Mon"
+        self._rtl = False
+
         self._tray = tray_icon
         self._rows = []
         self._filtered = []
         self._build()
+
+        # initial settings pull
+        if AS:
+            try:
+                cfg = AS.read_all()
+                self.apply_settings(cfg)
+            except Exception:
+                pass
+
+        # live settings
+        if BUS:
+            BUS.settingsApplied.connect(self.apply_settings)
+
         self._load_from_store()
         self._apply_filters()
         self._restore_column_widths()
 
-    # ---- public hooks for main ----
+    # ---- public hooks (kept for compatibility) ----
+    def set_defaults(self, *, default_len: int, day_start: str, day_end: str, week_starts: str):
+        self._default_len = int(default_len)
+        self._day_start = str(day_start or self._day_start)
+        self._day_end = str(day_end or self._day_end)
+        self._week_starts = str(week_starts or self._week_starts)
+
     def set_tray_icon(self, tray_icon: QtWidgets.QSystemTrayIcon):
         self._tray = tray_icon
 
@@ -247,6 +288,39 @@ class AppointmentTab(QtWidgets.QWidget):
                 self.table.clearSelection(); self.table.selectRow(r)
                 self.table.scrollToItem(it, QtWidgets.QAbstractItemView.PositionAtCenter)
                 break
+
+    # ---- apply settings from core/app_settings.py ----
+    def apply_settings(self, cfg: dict):
+        try:
+            # RTL
+            self._rtl = str(cfg.get("lang/rtl", False)).lower() in ("1","true","yes")
+            self.setLayoutDirection(QtCore.Qt.RightToLeft if self._rtl else QtCore.Qt.LeftToRight)
+
+            # notifications
+            self._toasts_enabled = str(cfg.get("notify/toasts", True)).lower() in ("1","true","yes")
+
+            # appointment defaults / windows
+            self._default_len = int(cfg.get("appts/default_len", self._default_len))
+            self._day_start = str(cfg.get("appts/day_start", self._day_start))
+            self._day_end = str(cfg.get("appts/day_end", self._day_end))
+            self._week_starts = str(cfg.get("appts/week_starts", self._week_starts))
+
+            # formats (accept "dd-MM-yyyy hh:mm AP" or similar)
+            fmt = str(cfg.get("clinic/datetime_fmt", f"{self._date_fmt} {self._time_fmt}"))
+            # naive split: assume the first token with 'y' is date and a token with 'h' is time
+            # safer: split by space at the last occurrence
+            if " " in fmt:
+                date_fmt, time_fmt = fmt.rsplit(" ", 1)
+            else:
+                date_fmt, time_fmt = fmt, self._time_fmt
+            self._date_fmt = date_fmt.strip() or self._date_fmt
+            self._time_fmt = time_fmt.strip() or self._time_fmt
+
+            # update any visible editors to the new formats (dialogs created later will pick it up)
+            self._apply_format_to_labels()
+            self._apply_filters()  # re-parse with new date fmt for scopes
+        except Exception:
+            pass
 
     # ---- build UI ----
     def _build(self):
@@ -312,8 +386,6 @@ class AppointmentTab(QtWidgets.QWidget):
 
         self.table.setItemDelegateForColumn(self.C_STATUS, StatusChipDelegate(self.table))
         self.table.setItemDelegateForColumn(self.C_REMIND, CheckBoxDelegate(self.table))
-
-        # Persist column widths when user resizes
         self.table.horizontalHeader().sectionResized.connect(self._save_column_widths)
 
         v.addWidget(self.table)
@@ -347,7 +419,7 @@ class AppointmentTab(QtWidgets.QWidget):
         # Apply glass QSS
         self.setStyleSheet(self._tab_qss())
 
-        # Keyboard shortcuts (clinician quality-of-life)
+        # Shortcuts
         QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+N"), self, activated=self._add_dialog)
         QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+S"), self, activated=self._save_all)
         QtWidgets.QShortcut(QtGui.QKeySequence("Delete"), self, activated=self._delete_selected)
@@ -356,15 +428,11 @@ class AppointmentTab(QtWidgets.QWidget):
         p = DS_COLORS
         return f"""
         QWidget {{ color:{p['text']}; font-family:'Segoe UI', Arial; font-size:14px; }}
-
-        /* Cards */
         QFrame[modernCard="true"] {{
             background:{p['panel']};
             border:1px solid rgba(255,255,255,0.45);
             border-radius:12px;
         }}
-
-        /* Inputs / selects */
         QLineEdit, QComboBox {{
             background:{p['inputBg']}; color:#0f172a;
             border:1px solid {p['stroke']}; border-radius:8px; padding:6px 10px;
@@ -374,8 +442,6 @@ class AppointmentTab(QtWidgets.QWidget):
             border:1px solid {p['primary']};
             box-shadow:0 0 0 2px rgba(58,141,255,0.18);
         }}
-
-        /* Buttons */
         QPushButton {{
             border-radius:10px; padding:8px 14px; font-weight:600;
             border:1px solid transparent; background:{p['primary']}; color:white;
@@ -389,8 +455,6 @@ class AppointmentTab(QtWidgets.QWidget):
         QPushButton[variant="success"] {{ background:{p['success']}; color:white; }}
         QPushButton[variant="info"]    {{ background:{p['info']}; color:white; }}
         QPushButton[variant="danger"]  {{ background:{p['danger']}; color:white; }}
-
-        /* Tables */
         QHeaderView::section {{
             background: rgba(255,255,255,0.85);
             color:#334155;
@@ -408,8 +472,6 @@ class AppointmentTab(QtWidgets.QWidget):
             selection-color:{p['selFg']};
         }}
         QTableView::item:!selected:alternate {{ background:{p['stripe']}; }}
-
-        /* Scrollbars */
         QScrollBar:vertical {{ background:transparent; width:10px; margin:4px; }}
         QScrollBar::handle:vertical {{ background:rgba(58,141,255,0.55); min-height:28px; border-radius:6px; }}
         QScrollBar:horizontal {{ background:transparent; height:10px; margin:4px; }}
@@ -421,10 +483,15 @@ class AppointmentTab(QtWidgets.QWidget):
     def _normalize(self, ap: dict) -> dict:
         out = dict(ap or {})
         out["Name"] = (out.get("Name") or "").strip() or "Unknown"
-        d = (out.get("Appointment Date") or "").strip() or _now_ddmmyyyy()
-        t = (out.get("Appointment Time") or "").strip() or "12:00 PM"
-        out["Appointment Date"] = d
-        out["Appointment Time"] = t
+
+        # Defaults for date/time using configured formats
+        today = QtCore.QDate.currentDate()
+        now = QtCore.QTime.currentTime()
+        d_str = (out.get("Appointment Date") or "").strip() or today.toString(self._date_fmt)
+        t_str = (out.get("Appointment Time") or "").strip() or now.toString(self._time_fmt)
+
+        out["Appointment Date"] = d_str
+        out["Appointment Time"] = t_str
         out["Status"] = (out.get("Status") or "Scheduled").strip() or "Scheduled"
         out["Notes"] = out.get("Notes") or ""
         out["Remind"] = bool(out.get("Remind", False))
@@ -442,6 +509,15 @@ class AppointmentTab(QtWidgets.QWidget):
         except Exception:
             self._rows = []
 
+    def _qdate_from_str_local(self, s: str) -> QtCore.QDate:
+        s = (s or "").strip()
+        # try configured, then a couple of legacy fallbacks
+        for fmt in (self._date_fmt, "dd-MM-yyyy", "yyyy-MM-dd"):
+            d = QtCore.QDate.fromString(s, fmt)
+            if d.isValid():
+                return d
+        return QtCore.QDate()
+
     def _apply_filters(self):
         q = (self.search.text() or "").strip().lower()
         status_sel = self.status_filter.currentText()
@@ -457,7 +533,7 @@ class AppointmentTab(QtWidgets.QWidget):
             start = today.addDays(-7); end = today
 
         def _in_scope(date_str):
-            d = _qdate_from_str(date_str)
+            d = self._qdate_from_str_local(date_str)
             return d.isValid() and d >= start and d <= end
 
         rows = []
@@ -474,18 +550,25 @@ class AppointmentTab(QtWidgets.QWidget):
             rows.append(ap)
 
         def _key(ap):
-            d = _qdate_from_str(ap.get("Appointment Date",""))
-            t = (ap.get("Appointment Time","") or "00:00")
-            try:
-                tm = datetime.strptime(t, "%I:%M %p").time()
-            except Exception:
-                try: tm = datetime.strptime(t, "%H:%M").time()
-                except Exception: tm = datetime.strptime("00:00","%H:%M").time()
+            d = self._qdate_from_str_local(ap.get("Appointment Date",""))
+            t = (ap.get("Appointment Time","") or "")
+            tm = self._parse_time_safe(t)
             return (d.isValid() and d.toPyDate() or datetime.max.date(), tm, ap.get("Name",""))
 
         rows.sort(key=_key)
         self._filtered = rows
         self._rebuild_table()
+
+    def _parse_time_safe(self, t: str) -> dt_time:
+        for fmt in ("%I:%M %p", "%H:%M"):
+            try:
+                return datetime.strptime(t, fmt).time()
+            except Exception:
+                continue
+        try:
+            return datetime.strptime("00:00", "%H:%M").time()
+        except Exception:
+            return dt_time(0, 0)
 
     def _rebuild_table(self):
         self.table.setSortingEnabled(False)
@@ -564,7 +647,7 @@ class AppointmentTab(QtWidgets.QWidget):
                    if (a.get("Name","")==name and a.get("Appointment Date","")==date and a.get("Appointment Time","")==time)), None)
         if not ap:
             QtWidgets.QMessageBox.warning(self, _tr("Edit"), _tr("Could not find selected appointment.")); return
-        dlg = AppointmentDialog(self, ap)
+        dlg = AppointmentDialog(self, ap, date_fmt=self._date_fmt, time_fmt=self._time_fmt)
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             new_ap = dlg.data()
             delete_appointment(name, date, time)
@@ -601,7 +684,7 @@ class AppointmentTab(QtWidgets.QWidget):
             self._notify(_tr("Appointment"), _tr("Deleted."))
 
     def _add_dialog(self):
-        dlg = AppointmentDialog(self)
+        dlg = AppointmentDialog(self, None, date_fmt=self._date_fmt, time_fmt=self._time_fmt)
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             self.add_appointment(dlg.data())
 
@@ -619,7 +702,7 @@ class AppointmentTab(QtWidgets.QWidget):
                         ap.get("Appointment Date",""),
                         ap.get("Appointment Time",""),
                         ap.get("Status",""),
-                        ap.get("Notes","").replace("\n"," ").strip(),
+                        (ap.get("Notes","") or "").replace("\n"," ").strip(),
                         "True" if ap.get("Remind", False) else "False",
                         ap.get("created_at",""),
                     ])
@@ -629,14 +712,19 @@ class AppointmentTab(QtWidgets.QWidget):
 
     def _notify(self, title: str, msg: str):
         try:
-            if self._tray:
+            if self._toasts_enabled and self._tray:
                 self._tray.showMessage(title, msg, QtWidgets.QSystemTrayIcon.Information, 3000)
         except Exception:
             pass
 
     # ---- column width persistence ----
     def _settings(self):
-        return QtCore.QSettings("YourOrg", "MedicalDocAI Demo v1.9.3")
+        if AS:
+            org = getattr(AS, "ORG", "Innova")
+            app = getattr(AS, "APP", "MedicalDocAI")
+        else:
+            org, app = "Innova", "MedicalDocAI"
+        return QtCore.QSettings(org, app)
 
     def _save_column_widths(self):
         s = self._settings()
@@ -652,6 +740,18 @@ class AppointmentTab(QtWidgets.QWidget):
                     self.table.setColumnWidth(c, int(w))
                 except Exception:
                     pass
+
+    # ---- helpers ----
+    def _apply_format_to_labels(self):
+        # No persistent editors here, but we can rename table headers to reflect formats if you like
+        self.table.setHorizontalHeaderLabels([
+            _tr("Name"),
+            _tr(f"Appointment Date"),
+            _tr(f"Appointment Time"),
+            _tr("Status"),
+            _tr("Notes"),
+            _tr("Remind"),
+        ])
 
 # ---- standalone run ----
 if __name__ == "__main__":
