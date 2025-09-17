@@ -1,5 +1,5 @@
 from __future__ import annotations
-import sys, types, traceback, contextlib
+import sys, types, traceback, contextlib, os, glob
 from typing import List, Optional, Tuple, Sequence
 from pathlib import Path
 import importlib, importlib.util, importlib.machinery
@@ -72,7 +72,6 @@ def _import_any(module_name: str, filename_candidates=None):
             continue
     raise ImportError(f"{module_name}: not found")
 
-# prevent accidental top-level windows during dynamic imports
 @contextlib.contextmanager
 def _no_external_windows():
     orig_mw_show = QtWidgets.QMainWindow.show
@@ -132,7 +131,7 @@ _ICONS = {
     "dashboard": """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13a8 8 0 1 1 16 0"/><path d="M12 13l4-4"/><circle cx="12" cy="13" r="1.2" fill="currentColor"/></svg>""",
     "account": """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M3.5 9h17M8 13h4M8 16h8"/></svg>""",
     "stats": """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V6M10 20V10M16 20V4M22 20H2"/></svg>""",
-    "settings": """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.02.02a2 2 0 1 1-2.83 2.83l-.02-.02A1.8 1.8 0 0 0 15 19.4a1.8 1.8 0 0 0-1 .18 1.8 1.8 0 0 1-2 0 1.8 1.8 0 0 0-1-.18 1.8 1.8 0 0 0-1 .18 1.8 1.8 0 0 1-2 0 1.8 1.8 0 0 0-1 .18 1.8 1.8 0 0 0-1.98-.36l-.02.02a2 2 0 1 1-2.83-2.83l.02-.02A1.8 1.8 0 0 0 4.6 15c0-.33-.06-.66-.18-.98a1.8 1.8 0 0 0 0-1.99c.12-.32.18-.65.18-.98a1.8 1.8 0 0 0-.36-1.98l-.02-.02a2 2 0 1 1 2.83-2.83l.02.02C6.34 5.24 6.67 5.12 7 5.12c.33 0 .66-.06.98-.18a1.8 1.8 0 0 0 1.99 0c.32-.12.65-.18 1.02-.18s.66.06.98.18a1.8 1.8 0 0 0 1.99 0c.32-.12.65-.18 1.02-.18.33 0 .66.06.98.18l.02-.02a2 2 0 1 1 2.83 2.83l-.02.02c.24.3.36.63.36.98 0 .33.06.66.18.98a1.8 1.8 0 0 0 0 1.99c-.12.32-.18.65-.18.98Z"/></svg>""",
+    "settings": """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.02.02a2 2 0 1 1-2.83 2.83l-.02-.02A1.8 1.8 0 0 0 15 19.4a1.8 1.8 0 0 0-1 .18 1.8 1.8 0 0 1-2 0 1.8 1.8 0 0 0-1 .18 1.8 1.8 0 0 0-1 .18 1.8 1.8 0 0 0-1.98-.36l-.02.02a2 2 0 1 1-2.83-2.83l.02-.02C6.34 5.24 6.67 5.12 7 5.12c.33 0 .66-.06.98-.18a1.8 1.8 0 0 0 1.99 0c.32-.12.65-.18 1.02-.18s.66.06.98.18a1.8 1.8 0  0 0 1.99 0c.32-.12.65-.18 1.02-.18.33 0 .66.06 .98.18l.02-.02a2 2 0 1 1 2.83 2.83l-.02.02c.24.3.36.63.36.98 0 .33.06.66.18.98a1.8 1.8 0 0 0 0 1.99c-.12.32-.18.65-.18.98Z"/></svg>""",
     "back": """<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/><path d="M21 12H9"/></svg>""",
 }
 def _qicon(name: str, size=18, color="#0f172a") -> QtGui.QIcon:
@@ -145,6 +144,38 @@ def _qicon(name: str, size=18, color="#0f172a") -> QtGui.QIcon:
     r.render(p)
     p.end()
     return QtGui.QIcon(QtGui.QPixmap.fromImage(img))
+
+# ---------------- helpers ----------------
+def _resolve_hf_snapshot_dir(base: str) -> str:
+    """
+    Accepts either a model root (…\\models--<name>) or an actual snapshot dir (…\\snapshots\\<HASH>).
+    Returns the path that contains `config.json` and `*.safetensors`.
+    """
+    p = Path(base)
+    if p.is_dir() and (p / "config.json").exists() and list(p.glob("*.safetensors")):
+        print(f"[HomePage] Using provided snapshot: {p}")
+        return str(p)
+
+    # Try …/snapshots/<HASH>
+    snaps = list((p / "snapshots").glob("*"))
+    snaps = [s for s in snaps if (s / "config.json").exists() and list(s.glob("*.safetensors"))]
+    if snaps:
+        # choose newest by mtime
+        snaps.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+        print(f"[HomePage] Auto-selected snapshot: {snaps[0]}")
+        return str(snaps[0])
+
+    # If base looks like …/hub/models--<org>--<model>, also try to look one up
+    if "models--" in p.name and (p / "snapshots").exists():
+        raise FileNotFoundError(
+            f"No valid snapshot found under: {p}\\snapshots\\<HASH>\n"
+            f"Make sure at least one snapshot contains config.json and model *.safetensors."
+        )
+
+    raise FileNotFoundError(
+        f"Model path does not contain config.json & weights: {p}\n"
+        f"Point to the snapshot folder (…\\snapshots\\<HASH>) or the model root containing snapshots."
+    )
 
 # ---------------- tile button ----------------
 class TileButton(QtWidgets.QPushButton):
@@ -216,7 +247,33 @@ class HomePage(QtWidgets.QWidget):
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
         super().__init__(parent)
         self._tiles: List[Tuple[str, str, str, List[str], List[str]]] = []
-        self._chat = ChatBotTab()
+        # In home_page.py __init__ method
+
+        # --- Define the bridge data FIRST ---
+        # In home_page.py -> __init__ method
+
+        # --- Define the bridge data FIRST ---
+        # 1) init state FIRST (used by bridge)
+        self._appointments_cache = []
+        self._appt_widget = None
+        self._accounts_widget = None
+        self._clientstats_widget = None
+
+        # 2) wire the chat bridge (methods must be on the class)
+        chat_bridge = {
+            "load_appointments": self._bridge_load_appts,
+            "append_appointment": self._bridge_append_appt,
+            "update_payment": self._bridge_update_payment,
+            "switch_to_appointments": self._open_appointments_tab,
+            "refresh_accounts": self._open_accounts_tab_then_refresh,
+            "switch_to_client_stats": self._open_client_stats_tab,
+        }
+
+        # 3) create chat with bridge
+        self._chat = ChatBotTab(bridge=chat_bridge)
+        self._chat.appointmentCreated.connect(self._on_appointment_created)
+
+        # 4) rest of your setup ...
         self._grid_column_hint = 2
         self._stack = QtWidgets.QStackedWidget(self)
         self._home_page = QtWidgets.QWidget()
@@ -224,13 +281,11 @@ class HomePage(QtWidgets.QWidget):
         self._detail_container = None
         self._build()
 
-        # apply saved settings to the page at startup (safe if helper exists)
         try:
             from core import app_settings
             app_settings.apply_to_home(app_settings.read_all(), self)
         except Exception:
             pass
-
     @property
     def chatbot(self) -> ChatBotTab:
         return self._chat
@@ -337,7 +392,7 @@ class HomePage(QtWidgets.QWidget):
         self._main.setStretch(0, 0)
         self._main.setStretch(1, 1)
 
-        # Tiles (module and class candidates)
+        # Tiles
         self._tiles = [
             ("extraction","Extraction","Parse notes, auto-structure",
              ["Tabs.extraction_tab", "extraction_tab", "Tabs.Extraction", "Extraction"],
@@ -358,6 +413,41 @@ class HomePage(QtWidgets.QWidget):
         self._populate_tiles()
         self._apply_breakpoints()
 
+    def _open_in_dialog(self, module_names, title, class_candidates):
+        """Show a module widget in the right-side 'detail' page (stack index 1)."""
+        try:
+            # 1) Clear old detail content (if any)
+            cont = self._detail_container
+            while cont.count():
+                item = cont.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    w.setParent(None)
+
+            # 2) Prefer an already-created widget that matches the requested class
+            widget = None
+            for attr in ("_appt_widget", "_accounts_widget", "_clientstats_widget"):
+                w = getattr(self, attr, None)
+                if w is not None and w.__class__.__name__ in (class_candidates or []):
+                    widget = w
+                    break
+
+            # 3) If not present, try to create it
+            if widget is None:
+                widget, err = _safe_create_widget(module_names or [], class_candidates or [])
+                if widget is None:
+                    self._toast(f"{title} not available:\n{err}")
+                    return
+
+            # 4) Mount into detail page and switch
+            cont.addWidget(widget, 1)
+            self._detail_title.setText(str(title or "Module"))
+            self._stack.setCurrentIndex(1)
+
+        except Exception:
+            traceback.print_exc()
+            self._toast(f"Failed to open {title or 'module'}.")
+
     def _build_detail(self):
         lay = QtWidgets.QVBoxLayout(self._detail_page)
         lay.setContentsMargins(16, 12, 16, 16); lay.setSpacing(10)
@@ -376,6 +466,7 @@ class HomePage(QtWidgets.QWidget):
             QToolButton:pressed { border-color:#6FA28B; }
         """)
         self._back_btn.clicked.connect(lambda: self._stack.setCurrentIndex(0))
+
 
         self._detail_title = QtWidgets.QLabel("Module")
         f = QtGui.QFont(); f.setFamilies(["Segoe UI","Inter","Arial"]); f.setPointSize(16); f.setWeight(QtGui.QFont.DemiBold)
@@ -418,7 +509,6 @@ class HomePage(QtWidgets.QWidget):
             if col >= cols:
                 col = 0; row += 1
 
-    # ---------- in-place navigation ----------
     def _open_in_place(self, module_names: List[str], title: str, class_candidates: List[str]):
         widget, err = _safe_create_widget(module_names, class_candidates)
 
@@ -455,7 +545,6 @@ class HomePage(QtWidgets.QWidget):
         else:
             lay.addWidget(widget)
 
-        # ---- Settings integration (duck-typed) ----
         try:
             from core import app_settings
             if hasattr(widget, "settingsApplied"):
@@ -470,13 +559,108 @@ class HomePage(QtWidgets.QWidget):
         self._detail_container.addWidget(container, 1)
         self._detail_title.setText(title)
         self._stack.setCurrentIndex(1)
+# ---- BRIDGE IMPLEMENTATION ----
+# home_page.py
+# home_page.py
+# Replace _bridge_load_appts in HomePage (home_page.py)
+    def _bridge_load_appts(self):
+        # Prefer live tab
+        if getattr(self, "_appt_widget", None) and hasattr(self._appt_widget, "get_appointments"):
+            try:
+                return self._appt_widget.get_appointments()
+            except Exception:
+                pass
+        # Fallback: persisted + cache
+        try:
+            from data.data import load_appointments
+            stored = load_appointments() or []
+        except Exception:
+            stored = []
+        return list(stored) + list(self._appointments_cache)
 
+    def _bridge_append_appt(self, appt: dict) -> bool:
+        # Try live tab
+        if getattr(self, "_appt_widget", None) and hasattr(self._appt_widget, "add_appointment"):
+            try:
+                self._appt_widget.add_appointment(appt)
+                return True
+            except Exception:
+                pass
+        # Persist and/or cache
+        try:
+            from data.data import append_appointment
+            append_appointment(appt)
+        except Exception:
+            pass
+        self._appointments_cache.append(appt)
+        return True
+
+    def _bridge_update_payment(self, name: str, payload: dict) -> bool:
+        # Live Accounts tab if available
+        try:
+            if getattr(self, "_accounts_widget", None) and hasattr(self._accounts_widget, "update_payment"):
+                return bool(self._accounts_widget.update_payment(name, payload))
+        except Exception:
+            pass
+        # Fallback to store
+        try:
+            from data.data import update_account_in_db
+            amt = float(payload.get("amount"))
+            return bool(update_account_in_db(name, {"Name": name, "Total Paid": amt}))
+        except Exception:
+            return False
+
+    def _open_appointments_tab(self, focus_name: Optional[str] = None):
+        if self._appt_widget is None:
+            widget, err = _safe_create_widget(["Tabs.appointment_tab"], ["AppointmentTab", "MainWidget"])
+            if widget is None:
+                self._toast(f"Appointments tab not available:\n{err}")
+                return
+            self._appt_widget = widget
+
+        if self._appointments_cache and hasattr(self._appt_widget, "bulk_add"):
+            try:
+                self._appt_widget.bulk_add(self._appointments_cache)
+                self._appointments_cache.clear()
+            except Exception:
+                pass
+
+        if focus_name and hasattr(self._appt_widget, "highlight_client"):
+            with contextlib.suppress(Exception):
+                self._appt_widget.highlight_client(focus_name)
+
+        self._open_in_place(["Tabs.appointment_tab"], "Appointments", ["AppointmentTab", "MainWidget"])
+
+    def _open_accounts_tab_then_refresh(self):
+        widget, err = _safe_create_widget(["Tabs.account_tab"], ["AccountsTab", "MainWidget"])
+        if widget is None:
+            self._toast(f"Accounts tab not available:\n{err}")
+            return
+        self._accounts_widget = widget
+        if hasattr(widget, "refresh"):
+            with contextlib.suppress(Exception):
+                widget.refresh()
+        self._open_in_place(["Tabs.account_tab"], "Accounts", ["AccountsTab", "MainWidget"])
+
+    def _open_client_stats_tab(self):
+        widget, err = _safe_create_widget(["Tabs.clients_stats_tab"], ["ClientStatsTab", "MainWidget"])
+        if widget is None:
+            self._toast(f"Client Stats tab not available:\n{err}")
+            return
+        self._clientstats_widget = widget
+        self._open_in_place(["Tabs.clients_stats_tab"], "Client Stats", ["ClientStatsTab", "MainWidget"])
+
+    def _on_appointment_created(self, appt: dict):
+        if not self._appt_widget:
+            self._appointments_cache.append(appt)
+
+    def _toast(self, msg: str):
+        QtWidgets.QMessageBox.information(self, "Info", msg)
 # ---------------- main (standalone) ----------------
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     try:
         from UI import design_system
-        # apply saved base size if available
         try:
             from core import app_settings
             cfg = app_settings.read_all()

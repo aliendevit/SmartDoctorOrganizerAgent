@@ -3,6 +3,8 @@ import importlib, importlib.util, sys, types, traceback, base64
 from typing import List, Optional, Tuple, Sequence
 from PyQt5 import QtCore, QtGui, QtWidgets, QtSvg
 from Tabs.chatbot_tab import ChatBotTab
+from home_page import _resolve_hf_snapshot_dir
+
 
 def _ensure_translation_helper():
     try:
@@ -459,13 +461,31 @@ if __name__ == "__main__":
     # make sure global theme is applied
     try:
         from UI import design_system
+
         design_system.apply_global_theme(app, base_point_size=11)
     except Exception:
         pass
+
     win = QtWidgets.QMainWindow()
     win.setWindowTitle("MedicalDOC.AI – V1.9.9demo")
     page = HomePage()
     win.setCentralWidget(page)
     win.resize(1200, 760)
     win.show()
+
+    # >>> LLM CONFIG HERE (after widget exists) <<<
+    try:
+        base_path = r"C:\Users\asult\.cache\huggingface\hub\models--gemma-3--270m-it"
+        snapshot = _resolve_hf_snapshot_dir(base_path)
+        print(f"[main] Configuring ChatBot with snapshot:\n  {snapshot}")
+        page.chatbot.set_model_config({
+            "model_path": snapshot,
+            "max_new_tokens": 220,
+            "temperature": 0.1,  # stable English, minimal drift
+        })
+        # Do NOT call set_llm_enabled(True); ChatBotTab flips to ON only after smoke test passes.
+    except Exception as e:
+        print("[main] LLM configure error:", e)
+        traceback.print_exc()
+
     sys.exit(app.exec_())

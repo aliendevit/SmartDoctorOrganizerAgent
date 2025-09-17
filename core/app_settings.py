@@ -1,17 +1,16 @@
 # core/app_settings.py
-from __future__ import annotations
-from PyQt5 import QtCore, QtGui, QtWidgets
-from typing import Optional, Dict
+from PyQt5 import QtCore, QtWidgets
+from typing import Dict  # <-- add this
 
-ORG = "Innova"
-APP = "MedicalDocAI"
+APP_ORG  = "YourOrg"
+APP_NAME = "MedicalDocAI Demo v1.9.3"
 
 def qsettings() -> QtCore.QSettings:
-    return QtCore.QSettings(ORG, APP)
+    """Return the global QSettings object for this app."""
+    return QtCore.QSettings(APP_ORG, APP_NAME)
 
-# Same keys used in Tabs/settings_tab.py
 DEFAULTS = {
-    "clinic/name": "",
+    "clinic/name": "My Clinic",
     "clinic/phone": "",
     "clinic/email": "",
     "clinic/address": "",
@@ -20,20 +19,21 @@ DEFAULTS = {
     "clinic/datetime_fmt": "dd-MM-yyyy hh:mm AP",
 
     "ui/theme": "Light",
-    "ui/base_pt": 11,
+    "ui/base_pt": 12,
     "ui/accent": "#3A8DFF",
-    "ui/glassy": True,
+    "ui/glassy": False,
 
-    "ai/enabled": True,
+    "ai/enabled": False,
     "ai/model_path": "",
-    "ai/max_tokens": 240,
-    "ai/temperature": 0.6,
-    "ai/autostart": True,
+    "ai/max_tokens": 220,
+    "ai/temperature": 0.1,
+    "ai/autostart": False,
+    "ai/compute_mode": "auto",  # new key
 
     "appts/default_len": 30,
     "appts/day_start": "07:00",
     "appts/day_end": "21:00",
-    "appts/week_starts": "Mon",
+    "appts/week_starts": "Sun",
 
     "bill/currency": "USD",
     "bill/tax_pct": 0.0,
@@ -46,22 +46,80 @@ DEFAULTS = {
     "lang/rtl": False,
 }
 
-def read_all() -> Dict[str, object]:
+def _seed_if_missing(s: QtCore.QSettings):
+    """Ensure every DEFAULTS key exists at least once."""
+    dirty = False
+    for k, v in DEFAULTS.items():
+        if s.value(k, None) is None:
+            s.setValue(k, v)
+            dirty = True
+    if dirty:
+        s.sync()
+
+def read_all() -> dict:
     s = qsettings()
-    out = {}
-    for k, dv in DEFAULTS.items():
-        out[k] = s.value(k, dv)
-    # normalize a few types:
-    out["ui/base_pt"] = int(out["ui/base_pt"])
-    out["ai/enabled"] = str(out["ai/enabled"]).lower() in ("1","true","yes")
-    out["ai/max_tokens"] = int(float(out["ai/max_tokens"]))
-    out["ai/temperature"] = float(out["ai/temperature"])
-    out["ai/autostart"] = str(out["ai/autostart"]).lower() in ("1","true","yes")
-    out["appts/default_len"] = int(float(out["appts/default_len"]))
-    out["bill/tax_pct"] = float(out["bill/tax_pct"])
-    out["notify/toasts"] = str(out["notify/toasts"]).lower() in ("1","true","yes")
-    out["lang/rtl"] = str(out["lang/rtl"]).lower() in ("1","true","yes")
+    _seed_if_missing(s)
+
+    def _b(key):  # bool
+        return str(s.value(key, DEFAULTS[key])).strip().lower() in ("1","true","yes","on")
+
+    def _i(key):  # int
+        try: return int(s.value(key, DEFAULTS[key]))
+        except: return int(DEFAULTS[key])
+
+    def _f(key):  # float
+        try: return float(s.value(key, DEFAULTS[key]))
+        except: return float(DEFAULTS[key])
+
+    def _s(key):  # str
+        v = s.value(key, DEFAULTS[key])
+        return str(v) if v is not None else str(DEFAULTS[key])
+
+    out = {
+        # clinic
+        "clinic/name":         _s("clinic/name"),
+        "clinic/phone":        _s("clinic/phone"),
+        "clinic/email":        _s("clinic/email"),
+        "clinic/address":      _s("clinic/address"),
+        "clinic/logo":         _s("clinic/logo"),
+        "clinic/timezone":     _s("clinic/timezone"),
+        "clinic/datetime_fmt": _s("clinic/datetime_fmt"),
+
+        # ui
+        "ui/theme":   _s("ui/theme"),
+        "ui/base_pt": _i("ui/base_pt"),
+        "ui/accent":  _s("ui/accent"),
+        "ui/glassy":  _b("ui/glassy"),
+
+        # ai
+        "ai/enabled":     _b("ai/enabled"),
+        "ai/model_path":  _s("ai/model_path"),
+        "ai/max_tokens":  _i("ai/max_tokens"),
+        "ai/temperature": _f("ai/temperature"),
+        "ai/autostart":   _b("ai/autostart"),
+        "ai/compute_mode":_s("ai/compute_mode"),  # auto|gpu|cpu
+
+        # appts
+        "appts/default_len": _i("appts/default_len"),
+        "appts/day_start":   _s("appts/day_start"),
+        "appts/day_end":     _s("appts/day_end"),
+        "appts/week_starts": _s("appts/week_starts"),
+
+        # billing
+        "bill/currency":       _s("bill/currency"),
+        "bill/tax_pct":        _f("bill/tax_pct"),
+        "bill/default_method": _s("bill/default_method"),
+
+        # notifications
+        "notify/toasts":     _b("notify/toasts"),
+        "notify/daily_time": _s("notify/daily_time"),
+
+        # lang
+        "lang/code": _s("lang/code"),
+        "lang/rtl":  _b("lang/rtl"),
+    }
     return out
+
 
 def apply_to_app(cfg: Dict[str, object], app: QtWidgets.QApplication):
     # Font size (immediate)

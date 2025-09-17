@@ -1,16 +1,41 @@
-# extraction_tab.py — Glass-matched Clinical Extraction (senior edition)
+# extraction_tab.py — Glass-matched Clinical Extraction (LLM-upgraded)
+import os
+from pathlib import Path
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+HF_CACHE = os.getenv("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+REPO_ID_DEFAULT = "google/gemma-2b-it"  # only used if we *allow* online
+
+def _resolve_local_snapshot():
+    """
+    Prefer a fully local snapshot from MEDICALDOC_LOCAL_MODEL (same env your chat tab uses),
+    which should point to the snapshot folder containing config.json + *.safetensors.
+    """
+    snap = (os.getenv("MEDICALDOC_LOCAL_MODEL") or "").strip()
+    if snap and Path(snap).exists() and (Path(snap) / "config.json").exists():
+        return snap
+    return ""
 
 import os
 import re
 import json
 import tempfile
 from datetime import datetime, timedelta
-from typing import Callable, Dict, List, Tuple
-
+from typing import Callable, Dict, List, Tuple, Optional
+from nlp.local_gemma_it import extract_fields
 from PyQt5 import QtWidgets, QtCore, QtGui
+try:
+    from nlp.local_gemma_it import extract_fields as _gemma_extract
+except Exception:
+    _gemma_extract = None
+
 
 __all__ = ["ExtractionTab"]
-
+#---transformer model
+try:
+    from nlp.transformers_extractor import extract_fields as _hf_extract
+except Exception:
+    _hf_extract = None
 # ---------- Global design tokens (safe fallback if design_system not present)
 try:
     from UI.design_system import COLORS as DS_COLORS
@@ -22,6 +47,15 @@ except Exception:
         "panelInner": "rgba(255,255,255,0.65)", "inputBg": "rgba(255,255,255,0.88)",
         "stripe": "rgba(240,247,255,0.65)", "selBg": "#3A8DFF", "selFg": "#ffffff",
     }
+
+# ---------- Optional Local LLM (Gemma) extractor ----------
+# If available, this provides: extract_structured(text) -> dict with the exact keys we need.
+_LLME = None
+try:
+    from core.ai_assistant import extract_structured as _llm_extract
+    _LLME = _llm_extract
+except Exception:
+    _LLME = None
 
 REPORTLAB_OK = True
 try:
@@ -49,7 +83,7 @@ except Exception:
         path = os.path.join(desktop, "reports"); os.makedirs(path, exist_ok=True)
         return path
 
-# ---------- Optional SmartExtractor ----------
+# ---------- Optional SmartExtractor (kept as legacy fallback) ----------
 _EXTRACTOR = None
 try:
     from nlp.smart_nlp import SmartExtractor
@@ -90,6 +124,13 @@ def _polish(*widgets):
             w.style().unpolish(w); w.style().polish(w); w.update()
         except Exception:
             pass
+print(
+    "[Extraction] Engines available -> "
+    f"LLME(core.ai_assistant)={bool(_LLME)}, "
+    f"Gemma(local_gemma_it)={bool(_gemma_extract)}, "
+    f"SmartExtractor={bool(_EXTRACTOR)}, "
+    f"Transformers={bool(_hf_extract)}"
+)
 
 # ====================== Parsing helpers ======================
 _DATE_RX = re.compile(r'(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})')
@@ -106,6 +147,10 @@ def _safe_dt_parse(date_str: str, fmt_list=("%d-%m-%Y","%d/%m/%Y","%d-%m-%y","%d
             return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
         except Exception:
             pass
+    # fallback: pick first dd-mm-yyyy-like substring
+    m = _DATE_RX.search(s)
+    if m:
+        return _safe_dt_parse(m.group(1))
     return _today_str()
 
 def _norm_time(s: str) -> str:
@@ -113,89 +158,301 @@ def _norm_time(s: str) -> str:
     for fmt in ("%I:%M %p","%I:%M%p","%H:%M"):
         try:
             dt = datetime.strptime(s, fmt)
-            return dt.strftime("%I:%M %p").lstrip("0")
+            return dt.strftime("%I:%M %p")
         except Exception:
             pass
+    # try to detect inside a longer string
+    m = _TIME_RX.search(s)
+    if m:
+        return _norm_time(m.group(1))
     return "12:00 PM"
+# --- NORMALIZATION FOR MODEL OUTPUT ---
+# ---------- Key normalization helpers ----------
+_NORM_RX = re.compile(r"[\s_\-\.\[\]\(\):]+")
 
+def _nk(s) -> str:
+    """Normalize a key: lowercase, remove spaces/underscores/punct for robust matching."""
+    return _NORM_RX.sub("", str(s or "")).lower()
+
+def _kv_flat(obj, out=None):
+    """
+    Flatten nested dict/list structure into a flat key->value map by key name only.
+    Last write wins. Also recurses into lists/dicts to surface nested sections like HPI, cc, etc.
+    """
+    if out is None: out = {}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            out[_nk(k)] = v
+            _kv_flat(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            _kv_flat(v, out)
+    return out
+
+def _first_in(flat: dict, keys: list):
+    """Return first non-empty value for any alias; if not found, suffix-match."""
+    for k in keys:
+        v = flat.get(_nk(k))
+        if v not in (None, "", [], {}):
+            return v
+    # suffix fallback: any key that ends with the alias (helps with dotted paths in some models)
+    for k, v in flat.items():
+        if any(k.endswith(_nk(alias)) for alias in keys):
+            if v not in (None, "", [], {}):
+                return v
+    return None
+
+def _to_listlike(v):
+    """Turn model output into a clean list of symptoms."""
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if str(x).strip()]
+    if isinstance(v, dict):
+        return [str(x).strip() for x in v.values() if str(x).strip()]
+    if isinstance(v, str):
+        s = v.strip()
+        # Try JSON first
+        try:
+            j = json.loads(s)
+            if isinstance(j, list):
+                return [str(x).strip() for x in j if str(x).strip()]
+        except Exception:
+            pass
+        # Split on common separators (English + Arabic " و ")
+        parts = re.split(r",|;|/|\\|\band\b| و ", s, flags=re.I)
+        return [p.strip() for p in parts if p.strip()]
+    return []
+def _post_normalize_llm(obj) -> dict:
+    flat = _kv_flat(obj)
+    out = {
+        "Name":            ( _first_in(flat, ["name","patient","patientname"]) or "" ).strip(),
+        "Age":             re.search(r"\d{1,3}", str(_first_in(flat, ["age"]) or "" )).group(0)
+                           if re.search(r"\d{1,3}", str(_first_in(flat, ["age"]) or "" )) else "",
+        "Symptoms":        _to_listlike( _first_in(flat, ["symptoms","chief complaint","cc","presenting complaint"]) or [] ),
+        "Notes":           ( _first_in(flat, ["notes","assessment","plan","impression","summary"]) or "" ).strip(),
+        "General Date":    str(_first_in(flat, ["general date","date","visit date"]) or ""),
+        "Appointment Date":str(_first_in(flat, ["appointment date","appt date"]) or ""),
+        "Appointment Time":str(_first_in(flat, ["appointment time","appt time","time"]) or ""),
+        "Follow-Up Date":  str(_first_in(flat, ["follow up date","follow-up date","fu date"]) or ""),
+    }
+    return out
+
+# --- RULE-BASED FALLBACK PARSER ---
 def _fallback_parse_patient_info(text: str) -> Dict:
-    text = (text or "").strip()
-    name = "Unknown"
+    t = (text or "").strip()
 
-    m_name = re.search(r'(?:Patient|Name)\s*[:\-]?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', text)
-    if m_name:
-        name = m_name.group(1)
+    # Name
+    name = ""
+    m = re.search(r"(?:^|\b)(?:patient(?: name)?|name)\s*[:\-]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})", t)
+    if not m: m = re.search(r"\b(?:Patient|Pt\.?)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})", t)
+    if m: name = m.group(1).strip()
 
-    m_age = re.search(r'\b(?:age|aged)\s*[:\-]?\s*(\d{1,3})\b', text, re.I)
-    age = int(m_age.group(1)) if m_age else ""
+    # Age
+    age = ""
+    m = re.search(r"\bage\s*[:\-]?\s*(\d{1,3})\b", t, re.I)
+    if not m: m = re.search(r"\b(\d{1,3})\s*(?:years?\s*old|yo)\b", t, re.I)
+    if m: age = m.group(1)
 
-    symptoms = []
-    m_sym = re.search(r'(?:complains of|symptoms?[:\-]?)\s+([^\.\n]+)', text, re.I)
-    if m_sym:
-        symptoms = [s.strip() for s in re.split(r'[,\u060C]+', m_sym.group(1)) if s.strip()]
+    # Symptoms
+    symptoms: List[str] = []
+    sym_rx_list = [
+        r"\b(?:presents?|presenting)\s+with\s+(?P<s>.+?)(?:[.;\n]|$)",
+        r"\bcc\s*[:\-]\s*(?P<s>.+?)(?:[.;\n]|$)",  # CC: ...
+        r"\bchief\s+complaints?\s*[:\-]?\s*(?P<s>.+?)(?:[.;\n]|$)",
+        r"\b(?:complain(?:s)?\s+of|c/o)\s+(?P<s>.+?)(?:[.;\n]|$)",
+        r"\b(?:reports?|has|experiencing|suffers?\s+from|hx\s*of|h/o)\s+(?P<s>.+?)(?:[.;\n]|$)",
+        r"\bsymptoms?\s*[:\-]?\s*(?P<s>.+?)(?:[.;\n]|$)",
+    ]
+    for rx in sym_rx_list:
+        m = re.search(rx, t, re.I)
+        if m:
+            symptoms = _to_listlike(m.group("s"))
+            if symptoms:
+                break
 
-    appt_date = None; appt_time = None
-    m_d = _DATE_RX.search(text); m_t = _TIME_RX.search(text)
-    if m_d: appt_date = _safe_dt_parse(m_d.group(1))
-    if m_t: appt_time = _norm_time(m_t.group(1))
+    # Notes (English/Arabic)
+    notes = ""
+    m = re.search(r"\b(?:notes?|assessment|plan|impression)\s*[:\-]\s*(.+?)(?:\n\n|\Z)", t, re.I | re.S)
+    if not m:
+        m = re.search(r"(?:ملاحظات|التقييم|الخطة)\s*[:\-]\s*(.+?)(?:\n\n|\Z)", t, re.S)
+    if m:
+        notes = m.group(1).strip()
+
+    # Dates/Times
+    appt_date = ""
+    appt_time = ""
+    m = re.search(r"\bappointment\b.*?"+_DATE_RX.pattern, t, re.I)
+    if m:
+        m2 = _DATE_RX.search(m.group(0))
+        if m2: appt_date = m2.group(1)
     if not appt_date:
-        lo = text.lower()
-        if "today" in lo: appt_date = _today_str()
-        elif "tomorrow" in lo:
-            appt_date = QtCore.QDate.currentDate().addDays(1).toString("dd-MM-yyyy")
+        m = _DATE_RX.search(t)
+        if m: appt_date = m.group(1)
 
-    summary = ""
-    m_sum = re.search(r'(?:summary)[:\-]\s*(.+)', text, re.I)
-    if m_sum:
-        summary = m_sum.group(1).strip()
-    if not summary:
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        summary = " ".join(sentences[:2]).strip() if sentences else ""
+    m = re.search(r"\bappointment\b.*?"+_TIME_RX.pattern, t, re.I)
+    if m:
+        m2 = _TIME_RX.search(m.group(0))
+        if m2: appt_time = m2.group(1)
+    if not appt_time:
+        m = _TIME_RX.search(t)
+        if m: appt_time = m.group(1)
 
     follow_up = ""
-    m_fu = re.search(r'(?:follow[- ]?up)[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4}|today|tomorrow)', text, re.I)
-    if m_fu:
-        v = (m_fu.group(1) or "").lower()
-        if v == "today":
-            follow_up = _today_str()
-        elif v == "tomorrow":
-            follow_up = QtCore.QDate.currentDate().addDays(1).toString("dd-MM-yyyy")
-        else:
-            follow_up = _safe_dt_parse(v)
+    m = re.search(r"\bfollow[\-\s]?up\b.*?"+_DATE_RX.pattern, t, re.I)
+    if m:
+        m2 = _DATE_RX.search(m.group(0))
+        if m2: follow_up = m2.group(1)
+
+    gen = _DATE_RX.search(t)
+    general_date = gen.group(1) if gen else ""
 
     return {
-        "Name": name,
+        "Name": name or "Unknown",
         "Age": age,
         "Symptoms": symptoms,
-        "Notes": "",
-        "Date": _today_str(),
-        "Appointment Date": appt_date or "Not Specified",
-        "Appointment Time": appt_time or "Not Specified",
-        "Summary": summary or "—",
-        "Follow-Up Date": follow_up or "Not Specified",
+        "Notes": notes,
+        "General Date": _safe_dt_parse(general_date) if general_date else _today_str(),
+        "Appointment Date": _safe_dt_parse(appt_date) if appt_date else "Not Specified",
+        "Appointment Time": _norm_time(appt_time) if appt_time else "Not Specified",
+        "Follow-Up Date": _safe_dt_parse(follow_up) if follow_up else "Not Specified",
+        "Date": _safe_dt_parse(general_date) if general_date else _today_str(),
     }
+# --- CANONICAL KEYS USED BY THE APP ---
+_CANON = ["Name","Age","Symptoms","Notes","General Date","Appointment Date","Appointment Time","Follow-Up Date","Date"]
+
+def _is_empty(v):
+    if v is None: return True
+    if isinstance(v, str): return v.strip() == "" or v.strip().lower() in {"n/a","na","none","not specified"}
+    if isinstance(v, list): return len(v) == 0
+    return False
+# put this near _CANON/_is_empty helpers
+_ENABLE_PROVENANCE = True
+
+def _track_fill(prev: dict, new: dict, label: str, prov: dict):
+    for k in _CANON:
+        if _is_empty(prev.get(k)) and not _is_empty(new.get(k)):
+            prov[k] = label
+
+def _as_list(v):
+    if isinstance(v, list): return v
+    if isinstance(v, str):
+        parts = re.split(r",|;| and ", v)
+        return [p.strip() for p in parts if p.strip()]
+    return []
+
+def _merge_extractions(primary: Dict, extra: Dict) -> Dict:
+    """Prefer primary; fill blanks from extra. Union lists; normalize dates/times."""
+    out = dict(primary or {})
+
+    def pick(k):
+        a, b = out.get(k), extra.get(k)
+        if k == "Symptoms":
+            sa = _as_list(a); sb = _as_list(b)
+            out[k] = list(dict.fromkeys([*sa, *sb])) if sa or sb else []
+            return
+        # numeric age
+        if k == "Age":
+            if _is_empty(a) and not _is_empty(b): out[k] = re.search(r"\d{1,3}", str(b)).group(0) if re.search(r"\d{1,3}", str(b)) else ""
+            return
+        # dates and time normalized
+        if k in ("General Date","Date","Appointment Date","Follow-Up Date"):
+            if _is_empty(a) and not _is_empty(b): out[k] = _safe_dt_parse(str(b))
+            return
+        if k == "Appointment Time":
+            if _is_empty(a) and not _is_empty(b): out[k] = _norm_time(str(b))
+            return
+        # everything else (Name/Notes)
+        if _is_empty(a) and not _is_empty(b): out[k] = b
+
+    for k in _CANON:
+        pick(k)
+
+    # Ensure Date mirrors General Date for back-compat
+    if _is_empty(out.get("Date")) and not _is_empty(out.get("General Date")):
+        out["Date"] = out["General Date"]
+    return out
+
+# --- WRAPPERS FOR EACH EXTRACTOR, ALL RETURN CANONICAL SCHEMA ---
+def _extract_with_gemma(text: str) -> Dict:
+    # 1) core.ai_assistant first
+    try:
+        if _LLME:
+            d = _LLME(text) or {}
+            print("[Extraction] LLME returned keys:", list(d.keys()))
+            if d: return _post_normalize_llm(d)
+    except Exception as e:
+        import traceback; print("[Extraction] LLME failed:", e); traceback.print_exc()
+
+    # 2) local_gemma_it
+    try:
+        if _gemma_extract:
+            d = _gemma_extract(text) or {}
+            print("[Extraction] Gemma returned keys:", list(d.keys()))
+            if d: return _post_normalize_llm(d)
+    except Exception as e:
+        import traceback; print("[Extraction] Gemma(local_gemma_it) failed:", e); traceback.print_exc()
+
+    return {}
+
+def _extract_with_smart(text: str) -> Dict:
+    try:
+        if _EXTRACTOR:
+            d = _EXTRACTOR.extract(text) or {}
+            print("[Extraction] SmartExtractor returned keys:", list(d.keys()))
+            if d: return _post_normalize_llm(d)
+    except Exception as e:
+        import traceback; print("[Extraction] SmartExtractor failed:", e); traceback.print_exc()
+    return {}
+
+def _extract_with_transformers(text: str) -> Dict:
+    try:
+        if _hf_extract:
+            d = _hf_extract(text) or {}
+            print("[Extraction] Transformers returned keys:", list(d.keys()))
+            if d: return _post_normalize_llm(d)
+    except Exception as e:
+        import traceback; print("[Extraction] Transformers failed:", e); traceback.print_exc()
+    return {}
+
 
 def parse_patient_info(text: str) -> Dict:
-    if _EXTRACTOR:
-        try:
-            data = _EXTRACTOR.extract(text) or {}
-            data = dict(data)
-            data.setdefault("Name", "Unknown")
-            data.setdefault("Date", _today_str())
-            ad = data.get("Appointment Date") or "Not Specified"
-            at = data.get("Appointment Time") or "Not Specified"
-            ad = _safe_dt_parse(ad) if ad not in ("", None, "Not Specified") else "Not Specified"
-            at = _norm_time(at) if at not in ("", None, "Not Specified") else "Not Specified"
-            data["Appointment Date"] = ad
-            data["Appointment Time"] = at
-            data.setdefault("Summary", "—")
-            data.setdefault("Follow-Up Date", "Not Specified")
-            data.setdefault("Symptoms", data.get("Symptoms") or [])
-            data.setdefault("Notes", data.get("Notes") or "")
-            return data
-        except Exception:
-            pass
-    return _fallback_parse_patient_info(text)
+    prov = {k: "—" for k in _CANON}
+
+    g = _extract_with_gemma(text)
+    merged = dict(g or {})
+    _track_fill({}, merged, "gemma", prov)
+
+    s = _extract_with_smart(text)
+    m2 = _merge_extractions(merged, s)
+    _track_fill(merged, m2, "smart", prov)
+    merged = m2
+
+    h = _extract_with_transformers(text)
+    m3 = _merge_extractions(merged, h)
+    _track_fill(merged, m3, "transformers", prov)
+    merged = m3
+
+    rb = _fallback_parse_patient_info(text)  # always run; safe filler
+    m4 = _merge_extractions(merged, rb)
+    _track_fill(merged, m4, "regex", prov)
+    merged = m4
+
+    # guarantee keys
+    for k in _CANON:
+        merged.setdefault(k, [] if k == "Symptoms" else "")
+    if _is_empty(merged.get("General Date")):
+        merged["General Date"] = _today_str()
+    if _is_empty(merged.get("Date")):
+        merged["Date"] = merged["General Date"]
+
+    if _ENABLE_PROVENANCE:
+        # console: see where each field came from
+        print("Extraction provenance:", prov)
+        # optional: expose for UI debugging without breaking tables
+        merged["_prov"] = prov  # comment out if you don't want it in JSON exports
+
+    return merged
+
+
 
 # ====================== Whisper helpers ======================
 USE_WHISPER_BY_DEFAULT = True
@@ -399,17 +656,19 @@ def generate_pdf_report(data: Dict, file_path: str):
     nm = data.get("Name","Unknown")
     elements.append(Paragraph(f"Patient Report: {nm}", styles["Title"]))
     elements.append(Spacer(1, 12))
-    summary = data.get("Summary","No summary available.")
-    elements.append(Paragraph(f"<b>Summary:</b><br/>{summary}", styles["BodyText"]))
-    elements.append(Spacer(1, 12))
+
+    # Optional brief notes summary at top if provided
+    summary = (data.get("Notes") or "").strip()
+    if summary:
+        elements.append(Paragraph(f"<b>Notes:</b><br/>{summary}", styles["BodyText"]))
+        elements.append(Spacer(1, 12))
 
     header = [Paragraph("<b>Field</b>", styles["BodyText"]), Paragraph("<b>Value</b>", styles["BodyText"])]
     rows = [header]
     fields = [
         ("Age", data.get("Age","N/A")),
         ("Symptoms", ", ".join(data.get("Symptoms",[]))),
-        ("Notes", data.get("Notes","N/A")),
-        ("General Date", data.get("Date","Not Specified")),
+        ("General Date", data.get("General Date","Not Specified")),
         ("Appointment Date", data.get("Appointment Date","Not Specified")),
         ("Appointment Time", data.get("Appointment Time","Not Specified")),
         ("Follow-Up Date", data.get("Follow-Up Date","Not Specified")),
@@ -476,7 +735,7 @@ def action_followup_rule(ctx: Dict) -> Tuple[Dict, List[str]]:
     lines = ["Applying follow-up rule…"]
     fu = (d.get("Follow-Up Date") or "").strip()
     if not fu or fu == "Not Specified":
-        base_str = _safe_dt_parse(d.get("Date"))
+        base_str = _safe_dt_parse(d.get("General Date") or d.get("Date") or _today_str())
         base = datetime.strptime(base_str, "%d-%m-%Y")
         d["Follow-Up Date"] = (base + timedelta(days=7)).strftime("%d-%m-%Y")
         lines.append(f"Set follow-up to {d['Follow-Up Date']}.")
@@ -525,80 +784,93 @@ def action_write_json(ctx: Dict) -> Tuple[Dict, List[str]]:
     return ctx, lines
 
 # ====================== Agent Simulator Dialog ======================
-class AgentSimDialog(QtWidgets.QDialog):
+class AgentRunDialog(QtWidgets.QDialog):
+    """
+    Real-time agent run:
+    - Uses your Agent's real actions (insert_db, followup_rule, etc.)
+    - Streams step_started / step_line / step_finished / log into the UI
+    - Runs in a worker thread; no freezing, no fake delays
+    """
     def __init__(self, agent: Agent, steps: List[str], ctx: Dict, parent=None):
         super().__init__(parent)
-        self.agent = agent
-        self.steps = steps
-        self.ctx = dict(ctx or {})
-        self.setWindowTitle("Agent (simulate/run)")
+        self.setWindowTitle("Agent (live)")
+        self.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
         self.resize(780, 560)
 
+        self.agent = agent
+        self.steps = list(steps)
+        self.ctx = dict(ctx or {})
+
         v = QtWidgets.QVBoxLayout(self)
+
+        # Header row
         head = QtWidgets.QHBoxLayout()
-        self.title = QtWidgets.QLabel("Autoflow: Visit → Report → Archive")
-        self.title.setStyleSheet("font-size:18px; font-weight:700;")
+        self.title = QtWidgets.QLabel("Running plan")
+        self.title.setStyleSheet("font-size:16px; font-weight:700;")
         head.addWidget(self.title); head.addStretch(1)
-        self.btn_run = QtWidgets.QPushButton("Run plan")
+        self.btn_run = QtWidgets.QPushButton("Run")
         self.btn_close = QtWidgets.QPushButton("Close")
         head.addWidget(self.btn_run); head.addWidget(self.btn_close)
         v.addLayout(head)
 
+        # Live log
         self.log = QtWidgets.QTextEdit(readOnly=True)
         self.log.setStyleSheet("font-family: Consolas, Menlo, monospace;")
         v.addWidget(self.log, 1)
 
+        # Files row (for PDF/JSON buttons the actions may create)
         self.files_row = QtWidgets.QHBoxLayout()
         self.files_row.addStretch(1)
         v.addLayout(self.files_row)
 
-        self.btn_close.clicked.connect(self.reject)
+        # Wire buttons
+        self.btn_close.clicked.connect(self.close)
         self.btn_run.clicked.connect(self._run)
 
-        self._queue: List[str] = []
-        self.agent.log.connect(self._enqueue)
-        self.agent.step_started.connect(lambda n: self._enqueue(f"\n▶️  {n}"))
-        self.agent.step_line.connect(lambda s: self._enqueue(f"   {s}"))
-        self.agent.step_finished.connect(lambda n, r: self._enqueue(f"✅ done: {n}"))
-
-        self._timer = QtCore.QTimer(self); self._timer.setInterval(700)
-        self._timer.timeout.connect(self._drain)
-        self._timer.start()
+        # Stream agent signals to the dialog
+        self.agent.log.connect(self._append)
+        self.agent.step_started.connect(lambda n: self._append(f"\n▶️  {n}"))
+        self.agent.step_line.connect(lambda s: self._append(f"   {s}"))
+        self.agent.step_finished.connect(lambda n, r: self._append(f"✅ done: {n}"))
 
         self.worker = None
 
-    def _enqueue(self, line: str):
-        self._queue.append(line)
-
-    def _drain(self):
-        if not self._queue: return
-        self.log.append(self._queue.pop(0))
-
-    def _run(self):
-        if self.worker: return
-        self.btn_run.setEnabled(False)
-        self._enqueue("Starting…")
-        self.worker = _AgentWorker(self.agent, list(self.steps), dict(self.ctx))
-        self.worker.done.connect(self._done)
-        self.worker.failed.connect(self._fail)
-        self.worker.start()
+    def _append(self, line: str):
+        self.log.append(line)
+        self.log.ensureCursorVisible()
 
     def _add_file_button(self, label: str, path: str):
         btn = QtWidgets.QPushButton(label)
         btn.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path)))
         self.files_row.insertWidget(self.files_row.count()-1, btn)
 
+    def _run(self):
+        if self.worker:
+            return
+        self.btn_run.setEnabled(False)
+        self._append("Starting…")
+
+        # Use your existing _AgentWorker which calls agent.run_plan()
+        self.worker = _AgentWorker(self.agent, list(self.steps), dict(self.ctx))
+        self.worker.done.connect(self._done)
+        self.worker.failed.connect(self._fail)
+        self.worker.start()
+
     def _done(self, ctx_out: Dict):
+        # If actions generated files, add open buttons
         pdf = ctx_out.get("pdf_path"); jsn = ctx_out.get("json_path")
         if pdf: self._add_file_button("Open PDF", pdf)
         if jsn: self._add_file_button("Open JSON", jsn)
-        self._enqueue("\n🎉 PLAN COMPLETE")
+        self._append("\n🎉 PLAN COMPLETE")
         self.btn_run.setEnabled(True)
+        self.worker = None
 
     def _fail(self, err: str):
-        self._enqueue(f"\n❌ FAILED: {err}")
+        self._append(f"\n❌ FAILED: {err}")
         QtWidgets.QMessageBox.critical(self, "Agent", err)
         self.btn_run.setEnabled(True)
+        self.worker = None
+
 
 class _AgentWorker(QtCore.QThread):
     done = QtCore.pyqtSignal(dict)
@@ -614,28 +886,6 @@ class _AgentWorker(QtCore.QThread):
             self.failed.emit(str(e))
 
 # ====================== Main Extraction Tab ======================
-def parse_patient_info(text: str) -> Dict:  # (already defined above; keep order if you prefer)
-    if _EXTRACTOR:
-        try:
-            data = _EXTRACTOR.extract(text) or {}
-            data = dict(data)
-            data.setdefault("Name", "Unknown")
-            data.setdefault("Date", _today_str())
-            ad = data.get("Appointment Date") or "Not Specified"
-            at = data.get("Appointment Time") or "Not Specified"
-            ad = _safe_dt_parse(ad) if ad not in ("", None, "Not Specified") else "Not Specified"
-            at = _norm_time(at) if at not in ("", None, "Not Specified") else "Not Specified"
-            data["Appointment Date"] = ad
-            data["Appointment Time"] = at
-            data.setdefault("Summary", "—")
-            data.setdefault("Follow-Up Date", "Not Specified")
-            data.setdefault("Symptoms", data.get("Symptoms") or [])
-            data.setdefault("Notes", data.get("Notes") or "")
-            return data
-        except Exception:
-            pass
-    return _fallback_parse_patient_info(text)
-
 class ExtractionTab(QtWidgets.QWidget):
     dataProcessed = QtCore.pyqtSignal(dict)
     appointmentProcessed = QtCore.pyqtSignal(dict)
@@ -659,7 +909,7 @@ class ExtractionTab(QtWidgets.QWidget):
         h = QtWidgets.QHBoxLayout(header); h.setContentsMargins(12,12,12,12); h.setSpacing(8)
         title = QtWidgets.QLabel(self.tr("Clinical Extraction"))
         title.setStyleSheet("font: 700 18pt 'Segoe UI';")
-        subtitle = QtWidgets.QLabel(self.tr("Dictate or paste—AI structures the visit, schedules follow-up, and generates a report."))
+        subtitle = QtWidgets.QLabel(self.tr("Dictate or paste—AI structures the visit and fills the report table."))
         subtitle.setStyleSheet(f"color:{DS_COLORS['muted']};")
         left = QtWidgets.QVBoxLayout(); left.addWidget(title); left.addWidget(subtitle)
         h.addLayout(left); h.addStretch(1)
@@ -676,10 +926,10 @@ class ExtractionTab(QtWidgets.QWidget):
         lbl = QtWidgets.QLabel(self.tr("Patient narrative (Arabic/English)."))
         lbl.setStyleSheet(f"color:{DS_COLORS['textDim']};")
         self.txt = QtWidgets.QTextEdit(); self.txt.setMinimumHeight(180)
-        self.txt.setPlaceholderText(self.tr("Example: Patient Jane Smith, age 23, complains of cough and headache. Appointment 21-11-2025 at 10:30 AM. Follow-up 28-11-2025. Summary: ..."))
+        self.txt.setPlaceholderText(self.tr("Example: Patient Jane Smith, age 23, complains of cough and headache. Appointment 21-11-2025 at 10:30 AM. Follow-up 28-11-2025."))
         lc.addWidget(lbl); lc.addWidget(self.txt, 1)
 
-        # Voice strip (no pause)
+        # Voice strip
         voice_strip = QtWidgets.QFrame()
         vs = QtWidgets.QHBoxLayout(voice_strip); vs.setContentsMargins(0,0,0,0); vs.setSpacing(8)
         self.voice = VoiceInputWidget(language="ar-SA", use_whisper=True, whisper_model_size="base")
@@ -715,8 +965,8 @@ class ExtractionTab(QtWidgets.QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
-        self.table.setSelectionBehavior(QtWidgets.QTableWidget.SelectRows)
-        self.table.setEditTriggers(QtWidgets.QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         rc.addWidget(self.table, 1)
 
         # Export row
@@ -755,21 +1005,49 @@ class ExtractionTab(QtWidgets.QWidget):
 
         # Apply glass theme for this tab
         self.setStyleSheet(self._tab_qss())
+#tab
+    def _normalize_appointment(self, data: Dict) -> Dict:
+        """Ensure dates/times exist and are formatted for downstream tabs."""
+
+        def _safe_dt_parse(date_str: str, fmt_list=("%d-%m-%Y", "%d/%m/%Y", "%d-%m-%y", "%d/%m/%y", "%Y-%m-%d")) -> str:
+            s = (date_str or "").strip()
+            for fmt in fmt_list:
+                try:
+                    return datetime.strptime(s, fmt).strftime("%d-%m-%Y")
+                except Exception:
+                    pass
+            # fall back to today if unparseable
+            return QtCore.QDate.currentDate().toString("dd-MM-yyyy")
+
+        def _norm_time(s: str) -> str:
+            s = (s or "").strip()
+            for fmt in ("%I:%M %p", "%I:%M%p", "%H:%M"):
+                try:
+                    dt = datetime.strptime(s, fmt)
+                    return dt.strftime("%I:%M %p").lstrip("0")
+                except Exception:
+                    pass
+            return "12:00 PM"
+
+        d = dict(data or {})
+        d["Date"] = _safe_dt_parse(d.get("Date"))
+        ad = d.get("Appointment Date")
+        at = d.get("Appointment Time")
+        d["Appointment Date"] = _safe_dt_parse(
+            ad) if ad and ad != "Not Specified" else QtCore.QDate.currentDate().toString("dd-MM-yyyy")
+        d["Appointment Time"] = _norm_time(at) if at and at != "Not Specified" else "12:00 PM"
+        return d
 
     # Glassy QSS for this tab
     def _tab_qss(self) -> str:
         p = DS_COLORS
         return f"""
         QWidget {{ color:{p['text']}; font-family:'Segoe UI', Arial; font-size:14px; }}
-
-        /* Cards */
         QFrame[modernCard="true"] {{
             background:{p['panel']};
             border:1px solid rgba(255,255,255,0.45);
             border-radius:12px;
         }}
-
-        /* Inputs */
         QLineEdit, QComboBox, QTextEdit {{
             background:{p['inputBg']};
             color:#0f172a;
@@ -783,23 +1061,18 @@ class ExtractionTab(QtWidgets.QWidget):
             border:1px solid {p['primary']};
             box-shadow:0 0 0 2px rgba(58,141,255,0.18);
         }}
-
-        /* Buttons */
         QPushButton {{
             border-radius:10px; padding:9px 14px; font-weight:600;
             border:1px solid transparent; background:{p['primary']}; color:white;
         }}
         QPushButton:hover {{ filter:brightness(1.05); }}
         QPushButton:pressed {{ filter:brightness(0.95); }}
-
         QPushButton[variant="ghost"] {{
             background: rgba(255,255,255,0.85); color:#0F172A; border:1px solid #D6E4F5;
         }}
         QPushButton[variant="ghost"]:hover {{ background: rgba(255,255,255,0.95); }}
         QPushButton[variant="success"] {{ background:{p['success']}; color:white; }}
         QPushButton[variant="info"]    {{ background:{p['info']};    color:white; }}
-
-        /* Tables */
         QHeaderView::section {{
             background: rgba(255,255,255,0.85);
             color:#334155;
@@ -817,8 +1090,6 @@ class ExtractionTab(QtWidgets.QWidget):
             selection-color:{p['selFg']};
         }}
         QTableView::item:!selected:alternate {{ background:{p['stripe']}; }}
-
-        /* Scrollbars */
         QScrollBar:vertical {{ background:transparent; width:10px; margin:4px; }}
         QScrollBar::handle:vertical {{ background:rgba(58,141,255,0.55); min-height:28px; border-radius:6px; }}
         QScrollBar:horizontal {{ background:transparent; height:10px; margin:4px; }}
@@ -843,35 +1114,75 @@ class ExtractionTab(QtWidgets.QWidget):
             last_lang = self._settings.value("extraction/last_lang", "auto", type=str)
             if last_text:
                 self.txt.setPlainText(last_text)
-            i = self.voice.combo.findData(last_lang)
-            if i >= 0:
-                self.voice.combo.setCurrentIndex(i)
+            # Voice widget may not be built when restoring — guard:
+            if hasattr(self, "voice") and self.voice and isinstance(self.voice, QtWidgets.QWidget):
+                i = self.voice.combo.findData(last_lang)
+                if i >= 0:
+                    self.voice.combo.setCurrentIndex(i)
         except Exception:
             pass
 
     def _save_state(self):
         try:
             self._settings.setValue("extraction/last_text", self.txt.toPlainText())
-            self._settings.setValue("extraction/last_lang", self.voice.combo.currentData() or "auto")
+            if hasattr(self, "voice") and self.voice and isinstance(self.voice, QtWidgets.QWidget):
+                self._settings.setValue("extraction/last_lang", self.voice.combo.currentData() or "auto")
         except Exception:
             pass
+
+    _tokenizer = None
+    _model = None
+
+    def _load():
+        global _tokenizer, _model
+        if _tokenizer is not None and _model is not None:
+            return _tokenizer, _model
+
+        local_snap = _resolve_local_snapshot()
+        if local_snap:
+            # ✅ Fully offline path (your case)
+            _tokenizer = AutoTokenizer.from_pretrained(local_snap, local_files_only=True)
+            _model = AutoModelForCausalLM.from_pretrained(local_snap, local_files_only=True)
+            return _tokenizer, _model
+
+        # Optional: allow online if your environment ever permits it
+        repo_or_path = os.getenv("GEMMA_REPO_ID", REPO_ID_DEFAULT)
+        allow_online = os.getenv("ALLOW_HF_ONLINE", "0") == "1"
+        _tokenizer = AutoTokenizer.from_pretrained(
+            repo_or_path, cache_dir=HF_CACHE, local_files_only=not allow_online
+        )
+        _model = AutoModelForCausalLM.from_pretrained(
+            repo_or_path, cache_dir=HF_CACHE, local_files_only=not allow_online
+        )
+        return _tokenizer, _model
 
     # ---------- Actions ----------
     def _load_test(self):
         tx = ("Patient Jane Smith, age 23, complains of cough and headache. "
               "Appointment: 21-11-2025 at 10:30 AM. "
               "Follow-up: 28-11-2025. "
-              "Summary: Patient exhibits mild respiratory distress.")
+              "Notes: Mild respiratory distress, advice fluids and rest.")
         self.txt.setPlainText(tx)
         self.lbl_status.setText(self.tr("Status: Sample loaded."))
 
-    def _normalize_appointment(self, data: Dict) -> Dict:
-        d = dict(data or {})
-        d["Date"] = _safe_dt_parse(d.get("Date"))
-        ad = d.get("Appointment Date"); at = d.get("Appointment Time")
-        d["Appointment Date"] = _safe_dt_parse(ad) if ad and ad != "Not Specified" else _today_str()
-        d["Appointment Time"] = _norm_time(at) if at and at != "Not Specified" else "12:00 PM"
-        return d
+    def _normalize_for_app(self, d: Dict) -> Dict:
+        """Ensure required keys exist & are formatted; mirror General Date → Date for app compatibility."""
+        out = dict(d or {})
+        # Normalize & defaults for the eight required fields
+        out["Name"] = (out.get("Name") or "Unknown") or "Unknown"
+        out["Age"] = out.get("Age") if (out.get("Age") not in ("", None)) else ""
+        out["Symptoms"] = out.get("Symptoms") or []
+        out["Notes"] = out.get("Notes") or ""
+        out["General Date"] = _safe_dt_parse(out.get("General Date") or out.get("Date") or _today_str())
+        out["Appointment Date"] = (_safe_dt_parse(out.get("Appointment Date"))
+                                   if out.get("Appointment Date") else "Not Specified")
+        out["Appointment Time"] = (_norm_time(out.get("Appointment Time"))
+                                   if out.get("Appointment Time") else "Not Specified")
+        out["Follow-Up Date"] = (_safe_dt_parse(out.get("Follow-Up Date"))
+                                 if out.get("Follow-Up Date") else "Not Specified")
+        # Back-compat for other tabs
+        out["Date"] = out["General Date"]
+        return out
 
     def _delayed_process(self):
         self.lbl_status.setText(self.tr("Status: Processing input…"))
@@ -892,8 +1203,10 @@ class ExtractionTab(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.warning(self, self.tr("Input Error"), self.tr("Please enter dictation or text."))
                 return
 
-            self.current_data = parse_patient_info(raw)
-            appt_payload = self._normalize_appointment(self.current_data)
+            extracted = parse_patient_info(raw)
+            self.current_data = self._normalize_for_app(extracted)
+
+            appt_payload = dict(self.current_data)  # already normalized
 
             self._populate_table(self.current_data)
             self.dataProcessed.emit(dict(self.current_data))
@@ -916,11 +1229,12 @@ class ExtractionTab(QtWidgets.QWidget):
                 self._thinking.hide()
 
     def _populate_table(self, data: Dict):
+        """Fill the report table with EXACT fields requested."""
         self.table.setRowCount(0)
         fnt = QtGui.QFont("Segoe UI", 11)
         order = [
-            "Name","Age","Symptoms","Summary","Notes",
-            "Date","Appointment Date","Appointment Time","Follow-Up Date"
+            "Name", "Age", "Symptoms", "Notes",
+            "General Date", "Appointment Date", "Appointment Time", "Follow-Up Date"
         ]
         for key in order:
             val = data.get(key, "")
@@ -968,11 +1282,64 @@ class ExtractionTab(QtWidgets.QWidget):
         QtWidgets.QMessageBox.information(self, self.tr("Excel"), self.tr("Appended to: ") + path)
         self.lbl_status.setText(self.tr("Status: Client name sent to Excel."))
 
+    def _resolve_compute_mode() -> str:
+        mode = str(AS.read_all().get("ai/compute_mode", "auto"))
+        if mode == "gpu" and torch.cuda.is_available(): return "cuda"
+        if mode == "cpu": return "cpu"
+        return "cuda" if torch.cuda.is_available() else "cpu"
+
+    def _make_whisper_model(size: str):
+        if not WHISPER_OK:
+            raise RuntimeError("faster-whisper not installed")
+        device = _resolve_compute_mode()
+        attempts = [
+            (device, "float16" if device == "cuda" else "int8"),
+            ("auto", "float16"),
+            ("cpu", "int8"),
+            ("cpu", "float32"),
+        ]
+        last_err = None
+        for dev, ctype in attempts:
+            try:
+                return WhisperModel(size, device=dev, compute_type=ctype)
+            except Exception as e:
+                last_err = e
+        raise RuntimeError(f"Whisper init failed. Last error: {last_err}")
     def _open_agent(self):
-        steps = ["insert_db", "followup_rule", "tag_status", "generate_pdf", "write_json"]
-        ctx = {"data": dict(getattr(self, "current_data", {}) or {})}
-        dlg = AgentSimDialog(self.agent, steps, ctx, self)
-        dlg.exec_()
+        """
+        Real-time Agent:
+        - Parse input
+        - Show live LLM narration as each step runs
+        """
+        try:
+            raw = self.txt.toPlainText().strip()
+            if not raw:
+                QtWidgets.QMessageBox.warning(self, self.tr("Input Error"), self.tr("Please enter dictation or text."))
+                return
+
+            # Parse exactly like Process
+            self.current_data = parse_patient_info(raw) or {}
+            appt_payload = self._normalize_appointment(self.current_data)
+
+            self._populate_table(self.current_data)
+            self.dataProcessed.emit(dict(self.current_data))
+            self.appointmentProcessed.emit(dict(appt_payload))
+            self.switchToAppointments.emit(appt_payload.get("Name", "Unknown"))
+
+            # Build steps (skip PDF if ReportLab missing)
+            steps = ["insert_db", "followup_rule", "tag_status"]
+            if REPORTLAB_OK:
+                steps.append("generate_pdf")
+            steps.append("write_json")
+
+            # Launch new real-time dialog
+            ctx = {"data": dict(self.current_data)}
+            dlg = AgentRunDialog(self.agent, steps, ctx, self)
+            dlg.exec_()
+
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, self.tr("Agent Error"), self.tr("The Agent run failed:\n") + str(e))
+
 
 # ---------- Standalone ----------
 if __name__ == "__main__":

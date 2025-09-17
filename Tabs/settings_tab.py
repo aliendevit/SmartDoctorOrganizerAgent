@@ -128,6 +128,11 @@ class SettingsTab(QtWidgets.QWidget):
         fl.addRow("App language", self.cmb_lang)
         fl.addRow("", self.chk_rtl)
 
+        self.cmb_compute = QtWidgets.QComboBox()
+        self.cmb_compute.addItems(["auto", "gpu", "cpu"])
+        self.cmb_compute.addItem("GPU", "gpu")
+        self.cmb_compute.addItem("CPU", "cpu")
+        fa.addRow("Compute mode", self.cmb_compute)  # add to the Assistant card
         # Buttons
         btns = QtWidgets.QHBoxLayout()
         btns.addStretch(1)
@@ -168,40 +173,44 @@ class SettingsTab(QtWidgets.QWidget):
     # ---------- load/save ----------
     def _load(self):
         cfg = AS.read_all()
-        self.ed_name.setText(cfg["clinic/name"])
-        self.ed_phone.setText(cfg["clinic/phone"])
-        self.ed_email.setText(cfg["clinic/email"])
-        self.ed_address.setText(cfg["clinic/address"])
-        self.ed_logo.setText(cfg["clinic/logo"])
-        idx = max(0, self.cmb_tz.findText(cfg["clinic/timezone"]))
+
+        self.ed_name.setText(cfg.get("clinic/name", ""))
+        self.ed_phone.setText(cfg.get("clinic/phone", ""))
+        self.ed_email.setText(cfg.get("clinic/email", ""))
+        self.ed_address.setText(cfg.get("clinic/address", ""))
+        self.ed_logo.setText(cfg.get("clinic/logo", ""))
+
+        idx = max(0, self.cmb_tz.findText(cfg.get("clinic/timezone", "UTC")))
         self.cmb_tz.setCurrentIndex(idx)
-        self.ed_fmt.setText(cfg["clinic/datetime_fmt"])
+        self.ed_fmt.setText(cfg.get("clinic/datetime_fmt", "dd-MM-yyyy hh:mm AP"))
 
-        self.spin_base.setValue(int(cfg["ui/base_pt"]))
-        self.lbl_accent.setText(str(cfg["ui/accent"]))
-        self.chk_glass.setChecked(bool(cfg["ui/glassy"]))
+        self.spin_base.setValue(int(cfg.get("ui/base_pt", 11)))
+        self.lbl_accent.setText(str(cfg.get("ui/accent", "#3A8DFF")))
+        self.chk_glass.setChecked(bool(cfg.get("ui/glassy", True)))
 
-        self.chk_ai.setChecked(bool(cfg["ai/enabled"]))
-        self.ed_model.setText(str(cfg["ai/model_path"]))
-        self.spin_max.setValue(int(cfg["ai/max_tokens"]))
-        self.dbl_temp.setValue(float(cfg["ai/temperature"]))
-        self.chk_autostart.setChecked(bool(cfg["ai/autostart"]))
+        self.chk_ai.setChecked(bool(cfg.get("ai/enabled", False)))
+        self.ed_model.setText(str(cfg.get("ai/model_path", "")))
+        self.spin_max.setValue(int(cfg.get("ai/max_tokens", 220)))
+        self.dbl_temp.setValue(float(cfg.get("ai/temperature", 0.1)))
+        self.chk_autostart.setChecked(bool(cfg.get("ai/autostart", False)))
 
-        self.spin_len.setValue(int(cfg["appts/default_len"]))
-        self.ed_day_start.setTime(QtCore.QTime.fromString(str(cfg["appts/day_start"]), "HH:mm"))
-        self.ed_day_end.setTime(QtCore.QTime.fromString(str(cfg["appts/day_end"]), "HH:mm"))
-        idx = max(0, self.cmb_week.findText(str(cfg["appts/week_starts"])))
+        self.spin_len.setValue(int(cfg.get("appts/default_len", 30)))
+        self.ed_day_start.setTime(QtCore.QTime.fromString(str(cfg.get("appts/day_start", "07:00")), "HH:mm"))
+        self.ed_day_end.setTime(QtCore.QTime.fromString(str(cfg.get("appts/day_end", "21:00")), "HH:mm"))
+        idx = max(0, self.cmb_week.findText(str(cfg.get("appts/week_starts", "Sun"))))
         self.cmb_week.setCurrentIndex(idx)
 
-        self.cmb_curr.setCurrentText(str(cfg["bill/currency"]))
-        self.dbl_tax.setValue(float(cfg["bill/tax_pct"]))
-        self.cmb_method.setCurrentText(str(cfg["bill/default_method"]))
+        self.cmb_curr.setCurrentText(str(cfg.get("bill/currency", "USD")))
+        self.dbl_tax.setValue(float(cfg.get("bill/tax_pct", 0.0)))
+        self.cmb_method.setCurrentText(str(cfg.get("bill/default_method", "Cash")))
 
-        self.chk_toast.setChecked(bool(cfg["notify/toasts"]))
-        self.ed_daily.setTime(QtCore.QTime.fromString(str(cfg["notify/daily_time"]), "HH:mm"))
+        self.chk_toast.setChecked(bool(cfg.get("notify/toasts", True)))
+        self.ed_daily.setTime(QtCore.QTime.fromString(str(cfg.get("notify/daily_time", "09:00")), "HH:mm"))
 
-        self.cmb_lang.setCurrentText(str(cfg["lang/code"]))
-        self.chk_rtl.setChecked(bool(cfg["lang/rtl"]))
+        self.cmb_lang.setCurrentText(str(cfg.get("lang/code", "en")))
+        self.chk_rtl.setChecked(bool(cfg.get("lang/rtl", False)))
+
+        self.cmb_compute.setCurrentText(str(cfg.get("ai/compute_mode", "auto")))
 
     def _save(self):
         s = AS.qsettings()
@@ -217,6 +226,8 @@ class SettingsTab(QtWidgets.QWidget):
         s.setValue("ui/base_pt", self.spin_base.value())
         s.setValue("ui/accent", self.lbl_accent.text())
         s.setValue("ui/glassy", self.chk_glass.isChecked())
+
+        s.setValue("ai/compute_mode", self.cmb_compute.currentText())
 
         s.setValue("ai/enabled", self.chk_ai.isChecked())
         s.setValue("ai/model_path", self.ed_model.text().strip())

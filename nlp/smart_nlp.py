@@ -1,10 +1,24 @@
 # smart_nlp.py
+# imports (top)
+try:
+    from dateparser.search import search_dates
+except Exception:
+    search_dates = None
+
+
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 import dateparser
 from rapidfuzz import fuzz, process
+# nlp/smart_nlp.py
+from typing import Dict
+from .local_gemma_it import extract_fields
+
+class SmartExtractor:
+    def extract(self, text: str) -> Dict:
+        return extract_fields(text or "")
 
 try:
     import spacy
@@ -135,48 +149,63 @@ class SmartExtractor:
             bits.append(f"Key symptoms: {sym}.")
         return " ".join(bits).strip() or text[:160]
 
-    def _extract_appointment(self, text) -> (Optional[str], Optional[str]):
-        # Look for explicit “appointment … <date/time>”
-        date_res = dateparser.search.search_dates(
-            text, settings={"PREFER_DATES_FROM": "future", "RELATIVE_BASE": datetime.now()}
-        )
-        if not date_res:
-            return None, None
+    def _extract_appointment(self, text: str):
+        t = text or ""
+        appt_date, appt_time = "", ""
 
-        # Prefer phrases near “appointment”, “appt”, “visit”, “see you”
-        def boost(dctx: str) -> int:
-            ctx = dctx.lower()
-            hints = ["appointment", "appt", "visit", "see you", "schedule", "scheduled"]
-            return sum(1 for h in hints if h in ctx)
+        # --- dates via dateparser (robust across versions)
+        date_cands = []
+        if search_dates:
+            try:
+                for matched, dt in (search_dates(t) or []):
+                    start = t.lower().find(matched.lower())
+                    if start >= 0:
+                        date_cands.append((start, matched, dt))
+            except Exception:
+                pass
 
-        best = max(
-            date_res,
-            key=lambda kv: (boost(text[max(0, kv[1].start()-25): kv[1].end()+25]), kv[1].end()-kv[1].start())
-        )
-        dt = best[1]
-        date_str = dt.strftime("%d-%m-%Y")
-        time_str = dt.strftime("%I:%M %p").lstrip("0")
-        return date_str, time_str
+        # fallback: simple regex if dateparser missing
+        if not date_cands:
+            for m in re.finditer(r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b", t):
+                date_cands.append((m.start(), m.group(0), None))
 
-    def _extract_followup(self, text) -> Optional[str]:
-        # Common patterns: "follow up in 2 weeks", "FU in 10 days", "review next month"
-        m = re.search(r"\b(f/u|follow[- ]?up|review)\b.*?\b(in|after)\s+(\d{1,3})\s+(day|days|week|weeks|month|months)\b", text, re.I)
+        # pick the date closest to the word "appointment"
+        if date_cands:
+            anchor = t.lower().find("appointment")
+            if anchor == -1:
+                anchor = len(t) // 2
+            appt_date = min(date_cands, key=lambda x: abs(x[0] - anchor))[1]
+
+        # --- time via regex (stable)
+        m = re.search(r"\b(\d{1,2}:\d{2}\s*[ap]m|\d{1,2}\s*[ap]m)\b", t, re.I)
         if m:
-            amt = int(m.group(3))
-            unit = m.group(4).lower()
-            delta = {"day": "days", "days": "days", "week": "weeks", "weeks": "weeks", "month": "days", "months": "days"}[unit]
-            # months ~= 30 days
-            days = amt * (1 if "day" in unit else 7 if "week" in unit else 30)
-            when = datetime.today() + timedelta(days=days)
-            return when.strftime("%d-%m-%Y")
+            appt_time = m.group(1)
 
-        # Try dateparser around the phrase “follow up”
-        snippet = None
-        mm = re.search(r"(?:follow[- ]?up|f/u|review).{0,60}", text, re.I)
-        if mm:
-            snippet = mm.group(0)
-        if snippet:
-            dt = dateparser.parse(snippet, settings={"PREFER_DATES_FROM": "future"})
-            if isinstance(dt, datetime):
-                return dt.strftime("%d-%m-%Y")
-        return None
+        return appt_date, appt_time
+
+    def _extract_followup(self, text: str):
+        t = text or ""
+        follow = ""
+        date_cands = []
+        if search_dates:
+            try:
+                for matched, dt in (search_dates(t) or []):
+                    start = t.lower().find(matched.lower())
+                    if start >= 0:
+                        date_cands.append((start, matched, dt))
+            except Exception:
+                pass
+        if not date_cands:
+            for m in re.finditer(r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b", t):
+                date_cands.append((m.start(), m.group(0), None))
+
+        if date_cands:
+            anchor = max(
+                (t.lower().rfind("follow-up"), t.lower().rfind("follow up"), t.lower().rfind("fu")),
+                default=-1
+            )
+            if anchor == -1:
+                anchor = len(t) // 2
+            follow = min(date_cands, key=lambda x: abs(x[0] - anchor))[1]
+        return follow
+

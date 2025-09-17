@@ -280,6 +280,20 @@ class AppointmentTab(QtWidgets.QWidget):
             self._notify(_tr("Appointment"),
                          _tr(f"Saved for {appt['Name']} on {appt['Appointment Date']} {appt['Appointment Time']}"))
 
+    def get_appointments(self):
+        try:
+            return list(self._rows) if getattr(self, "_rows", None) else (load_appointments() or [])
+        except Exception:
+            return list(getattr(self, "_rows", []))
+
+    def bulk_add(self, appts: list):
+        for ap in appts or []:
+            try:
+                self.add_appointment(ap)
+            except Exception:
+                pass
+        return True
+
     def highlight_client(self, client_name: str):
         name_l = (client_name or "").strip().lower()
         for r in range(self.table.rowCount()):
@@ -480,24 +494,39 @@ class AppointmentTab(QtWidgets.QWidget):
         """
 
     # ---- data flow ----
+    # inside class AppointmentTab
     def _normalize(self, ap: dict) -> dict:
         out = dict(ap or {})
-        out["Name"] = (out.get("Name") or "").strip() or "Unknown"
 
-        # Defaults for date/time using configured formats
+        # Accept bot-style lowercase keys too
+        name = (out.get("Name") or out.get("name") or "").strip()
+        d_in = (out.get("Appointment Date") or out.get("Date") or out.get("date") or "").strip()
+        t_in = (out.get("Appointment Time") or out.get("Time") or out.get("time") or "").strip()
+
         today = QtCore.QDate.currentDate()
         now = QtCore.QTime.currentTime()
-        d_str = (out.get("Appointment Date") or "").strip() or today.toString(self._date_fmt)
-        t_str = (out.get("Appointment Time") or "").strip() or now.toString(self._time_fmt)
 
-        out["Appointment Date"] = d_str
-        out["Appointment Time"] = t_str
+        out["Name"] = name or "Unknown"
+        out["Appointment Date"] = d_in or today.toString(self._date_fmt)
+        out["Appointment Time"] = t_in or now.toString(self._time_fmt)
         out["Status"] = (out.get("Status") or "Scheduled").strip() or "Scheduled"
         out["Notes"] = out.get("Notes") or ""
         out["Remind"] = bool(out.get("Remind", False))
         if "created_at" not in out:
             out["created_at"] = datetime.now().isoformat(timespec="seconds")
         return out
+
+    # inside class AppointmentTab
+    def bulk_add(self, appts: list):
+        """Add a list of appointments (from bridge cache) and refresh once."""
+        changed = False
+        for ap in appts or []:
+            ap_norm = self._normalize(ap)
+            ch, stored_list = append_appointment(ap_norm)
+            self._rows = list(stored_list)
+            changed = ch or changed
+        self._apply_filters()
+        return True
 
     def _reload(self):
         self._load_from_store()
@@ -637,6 +666,14 @@ class AppointmentTab(QtWidgets.QWidget):
                 (self.table.item(r, self.C_NAME) or QtWidgets.QTableWidgetItem("")).text(),
                 (self.table.item(r, self.C_DATE) or QtWidgets.QTableWidgetItem("")).text(),
                 (self.table.item(r, self.C_TIME) or QtWidgets.QTableWidgetItem("")).text())
+
+    # appointment_tab.py (inside class AppointmentTab)
+    def get_appointments(self):
+        try:
+            # prefer already loaded rows; otherwise pull from store
+            return list(self._rows) if getattr(self, "_rows", None) else (load_appointments() or [])
+        except Exception:
+            return list(getattr(self, "_rows", []))
 
     def _edit_selected(self):
         sel = self._sel_row_key()

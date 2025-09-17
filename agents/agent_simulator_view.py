@@ -44,89 +44,129 @@ class AgentWorker(QtCore.QThread):
         except Exception as e:
             self.failed.emit(str(e))
 
-class AgentSimDialog(QtWidgets.QDialog):
-    done_ctx = QtCore.pyqtSignal(dict)
-
-    def __init__(self, agent: Agent, plan: AgentPlan, ctx: dict, parent=None):
+class AgentRunDialog(QtWidgets.QDialog):
+    """
+    Real-time, LLM-narrated agent run:
+    - Streams short narration from Gemma before each action
+    - Executes your existing actions (real work)
+    - Appends the action logs and any generated files
+    """
+    def __init__(self, agent: Agent, steps: List[str], ctx: Dict, parent=None):
         super().__init__(parent)
         self.agent = agent
-        self.plan = plan
+        self.steps = steps
         self.ctx = dict(ctx or {})
-        self.setWindowTitle("Agent Simulation")
-        self.resize(820, 560)
+        self.setWindowTitle("Agent (real-time)")
+        self.resize(820, 600)
 
-        # --- UI ---
         v = QtWidgets.QVBoxLayout(self)
-
-        # Title + subtitle
         head = QtWidgets.QHBoxLayout()
-        title = QtWidgets.QLabel("🧠 Autonomous Agent")
-        title.setStyleSheet("font: 700 20pt 'Segoe UI';")
-        subtitle = QtWidgets.QLabel("watch the plan execute in real-time")
-        subtitle.setStyleSheet("color:#6b7280;")
-        head.addWidget(title)
-        head.addStretch(1)
-        head.addWidget(subtitle)
-        v.addLayout(head)
+        self.title = QtWidgets.QLabel("Visit → Report → Archive (Live)")
+        self.title.setStyleSheet("font-size:18px; font-weight:700;")
+        head.addWidget(self.title); head.addStretch(1)
 
-        # Timeline + console
-        split = QtWidgets.QSplitter()
-        split.setOrientation(QtCore.Qt.Horizontal)
-
-        # Left: steps list (timeline)
-        left = QtWidgets.QWidget()
-        lyl = QtWidgets.QVBoxLayout(left)
-        lyl.setContentsMargins(8,8,8,8)
-        self.step_list = QtWidgets.QListWidget()
-        self.step_list.setAlternatingRowColors(True)
-        for s in self.plan.steps:
-            self.step_list.addItem(f"○ {s}")
-        lyl.addWidget(QtWidgets.QLabel("Timeline"))
-        lyl.addWidget(self.step_list)
-        split.addWidget(left)
-
-        # Right: console log with typer
-        right = QtWidgets.QWidget()
-        ryl = QtWidgets.QVBoxLayout(right)
-        ryl.setContentsMargins(8,8,8,8)
-        ryl.addWidget(QtWidgets.QLabel("Agent console"))
-        self.console = QtWidgets.QTextEdit(readOnly=True)
-        self.console.setStyleSheet("background:#0b1020; color:#e5e7eb; font-family:Consolas,Monaco,monospace;")
-        ryl.addWidget(self.console)
-        split.addWidget(right)
-        split.setSizes([250, 570])
-
-        v.addWidget(split)
-
-        # Footer: actions
-        footer = QtWidgets.QHBoxLayout()
-        self.btn_sim = QtWidgets.QPushButton("Simulate")
-        self.btn_run = QtWidgets.QPushButton("Run plan")
+        self.btn_run = QtWidgets.QPushButton("Run")
         self.btn_close = QtWidgets.QPushButton("Close")
-        footer.addWidget(self.btn_sim)
-        footer.addWidget(self.btn_run)
-        footer.addStretch(1)
-        footer.addWidget(self.btn_close)
-        v.addLayout(footer)
+        head.addWidget(self.btn_run); head.addWidget(self.btn_close)
+        v.addLayout(head)
+        self.btn_close.clicked.connect(self.reject)
 
-        self.btn_close.clicked.connect(self.close)
-        self.btn_sim.clicked.connect(self._simulate)
+        self.view = QtWidgets.QTextBrowser()
+        self.view.setStyleSheet("font-family: Consolas, Menlo, monospace;")
+        v.addWidget(self.view, 1)
+
+        self.files_row = QtWidgets.QHBoxLayout()
+        self.files_row.addStretch(1)
+        v.addLayout(self.files_row)
+
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setRange(0, max(1, len(self.steps)))
+        self.progress.setValue(0)
+        v.addWidget(self.progress)
+
         self.btn_run.clicked.connect(self._run)
+        self._narrator: Optional[_Narrator] = None
+        self._running = False
 
-        # typer
-        self.typer = _Typer(self.console, delay_ms=700, parent=self)
+        # a compact narrator system prompt
+        self._sys = (
+            "You are a concise assistant narrating an automated clinic workflow.\n"
+            "Keep each message 1–2 sentences, plain English, no emojis.\n"
+            "Be specific but brief about what will happen next.\n"
+        )
 
-        # Hook agent signals -> UI
-        self.agent.log.connect(lambda s: self.typer.add_lines(s))
-        self.agent.step_started.connect(self._on_step_started)
-        self.agent.step_finished.connect(self._on_step_finished)
-        self.agent.errored.connect(lambda s: self.typer.add_lines(f"❌ {s}"))
+    def _append(self, line: str):
+        self.view.append(QtCore.QDateTime.currentDateTime().toString("[hh:mm:ss] ") + line)
 
-        # Style list rows a bit
-        self.step_list.setStyleSheet("""
-            QListWidget::item { padding:8px; }
-            QListWidget::item:selected { background:#e5e7eb; color:#111827; }
-        """)
+    def _start_narration(self, user_text: str, max_tokens=90):
+        if self._narrator:
+            try: self._narrator.stop()
+            except Exception: pass
+        self._narrator = _Narrator(self._sys, user_text, max_new_tokens=max_tokens, temperature=0.1)
+        self._narrator.chunk.connect(lambda s: self._append(s))
+        self._narrator.done.connect(lambda: self._append(""))
+        self._narrator.failed.connect(lambda e: self._append(f"[narration error] {e}"))
+        self._narrator.start()
+
+    def _run(self):
+        if self._running: return
+        self._running = True
+        self.btn_run.setEnabled(False)
+        QtCore.QTimer.singleShot(0, self._drive)
+
+    def _add_file_button(self, label: str, path: str):
+        btn = QtWidgets.QPushButton(label)
+        btn.clicked.connect(lambda: QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path)))
+        self.files_row.insertWidget(self.files_row.count()-1, btn)
+
+    def _drive(self):
+        try:
+            for i, step_name in enumerate(self.steps, 1):
+                # 1) narrate what's about to happen (streamed)
+                self._append(f"\n▶️  {step_name}")
+                preview = f"Next: '{step_name}'. Explain briefly what this action will do with the current patient data."
+                self._start_narration(preview)
+
+                # Let narration render a bit (non-blocking short wait)
+                QtWidgets.QApplication.processEvents()
+                QtCore.QThread.msleep(150)
+
+                # 2) actually run the action
+                fn = self.agent._actions.get(step_name)
+                if not fn:
+                    self._append(f"⚠️ step '{step_name}' not found; skipped")
+                    self.progress.setValue(i)
+                    continue
+
+                new_ctx, lines = fn(dict(self.ctx))
+                self.ctx.update(new_ctx or {})
+                for ln in (lines or []):
+                    self._append("   " + ln)
+
+                # 3) optional: summarize result in 1 line (LLM)
+                if HAVE_LLM_NARRATOR:
+                    summ = (
+                        "Summarize the outcome of this step in one short sentence, "
+                        "mentioning any dates/files if relevant."
+                    )
+                    self._start_narration(summ, max_tokens=50)
+                    QtCore.QThread.msleep(120)
+
+                # show any produced files
+                pdf = self.ctx.get("pdf_path"); jsn = self.ctx.get("json_path")
+                if pdf: self._add_file_button("Open PDF", pdf)
+                if jsn: self._add_file_button("Open JSON", jsn)
+
+                self.progress.setValue(i)
+                QtWidgets.QApplication.processEvents()
+
+            self._append("\n✅ Plan complete.")
+        except Exception as e:
+            self._append(f"\n❌ FAILED: {e}")
+        finally:
+            self._running = False
+            self.btn_run.setEnabled(True)
+
 
     # --- signal handlers ---
     def _on_step_started(self, name: str):
