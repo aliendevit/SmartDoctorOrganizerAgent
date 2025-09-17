@@ -2,8 +2,30 @@ from __future__ import annotations
 import importlib, importlib.util, sys, types, traceback, base64
 from typing import List, Optional, Tuple, Sequence
 from PyQt5 import QtCore, QtGui, QtWidgets, QtSvg
-from Tabs.chatbot_tab import ChatBotTab
-from home_page import _resolve_hf_snapshot_dir
+
+if __package__:
+    try:
+        from .Tabs.chatbot_tab import ChatBotTab
+    except Exception:
+        ChatBotTab = None  # type: ignore[assignment]
+    from .home_page import _resolve_hf_snapshot_dir
+else:
+    try:
+        from Tabs.chatbot_tab import ChatBotTab  # type: ignore[assignment]
+    except Exception:
+        ChatBotTab = None  # type: ignore[assignment]
+    from home_page import _resolve_hf_snapshot_dir
+
+if ChatBotTab is None:
+    class ChatBotTab(QtWidgets.QWidget):
+        def __init__(self, *_, **__):
+            super().__init__()
+            layout = QtWidgets.QVBoxLayout(self)
+            msg = QtWidgets.QLabel(
+                "ChatBot module unavailable (missing optional dependencies)."
+            )
+            msg.setWordWrap(True)
+            layout.addWidget(msg)
 
 
 def _ensure_translation_helper():
@@ -455,10 +477,12 @@ class HomePage(QtWidgets.QWidget):
         self._floating_windows.append(dlg)
         dlg.show()
 
-if __name__ == "__main__":
-    import sys
-    app = QtWidgets.QApplication(sys.argv)
-    # make sure global theme is applied
+def main(app: Optional[QtWidgets.QApplication] = None) -> int:
+    """Launch the primary UI window and start the Qt event loop."""
+
+    if app is None:
+        app = QtWidgets.QApplication(sys.argv)
+
     try:
         from UI import design_system
 
@@ -488,4 +512,10 @@ if __name__ == "__main__":
         print("[main] LLM configure error:", e)
         traceback.print_exc()
 
-    sys.exit(app.exec_())
+    return app.exec_()
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())

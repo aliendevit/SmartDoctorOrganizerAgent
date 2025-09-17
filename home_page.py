@@ -5,7 +5,28 @@ from pathlib import Path
 import importlib, importlib.util, importlib.machinery
 
 from PyQt5 import QtCore, QtGui, QtWidgets, QtSvg
-from Tabs.chatbot_tab import ChatBotTab
+
+if __package__:
+    try:
+        from .Tabs.chatbot_tab import ChatBotTab
+    except Exception:
+        ChatBotTab = None  # type: ignore[assignment]
+else:
+    try:
+        from Tabs.chatbot_tab import ChatBotTab  # type: ignore[assignment]
+    except Exception:
+        ChatBotTab = None  # type: ignore[assignment]
+
+if ChatBotTab is None:
+    class ChatBotTab(QtWidgets.QWidget):
+        def __init__(self, *_, **__):
+            super().__init__()
+            layout = QtWidgets.QVBoxLayout(self)
+            msg = QtWidgets.QLabel(
+                "ChatBot module unavailable (missing optional dependencies)."
+            )
+            msg.setWordWrap(True)
+            layout.addWidget(msg)
 
 ROOT = Path(__file__).resolve().parent
 
