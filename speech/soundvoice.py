@@ -31,7 +31,7 @@ class SoundVoiceRecorder:
         self.channels = int(channels)
         self.dtype = "int16"
         self._queue_maxsize = max(1, int(queue_maxsize))
-        self._queue: "queue.Queue[Optional[bytes]]" = queue.Queue(maxsize=self._queue_maxsize)
+        self._queue: Optional["queue.Queue[Optional[bytes]]"] = None
         self._frames: List[bytes] = []
         self._stream = None
         self._reader_thread: Optional[threading.Thread] = None
@@ -51,12 +51,13 @@ class SoundVoiceRecorder:
         return msgs
 
     def _enqueue(self, data: Optional[bytes], *, ensure_delivery: bool = False):
-        if self._queue is None:
+        target = self._queue
+        if target is None:
             return
         if ensure_delivery:
             while True:
                 try:
-                    self._queue.put(data, timeout=0.1)
+                    target.put(data, timeout=0.1)
                     break
                 except queue.Full:  # pragma: no cover - bounded queues drain quickly
                     if not self._running and (
@@ -65,7 +66,7 @@ class SoundVoiceRecorder:
                         break
         else:
             try:
-                self._queue.put_nowait(data)
+                target.put_nowait(data)
             except queue.Full:  # pragma: no cover - should not occur, but guard anyway
                 pass
 
@@ -141,11 +142,15 @@ class SoundVoiceRecorder:
         if self._reader_thread is not None:
             self._reader_thread.join(timeout=1.0)
         self._reader_thread = None
+        self._queue = None
 
     def _drain_queue(self) -> None:
         while True:
             try:
-                chunk = self._queue.get(timeout=0.5)
+                queue_obj = self._queue
+                if queue_obj is None:
+                    break
+                chunk = queue_obj.get(timeout=0.5)
             except queue.Empty:
                 if not self._running:
                     break

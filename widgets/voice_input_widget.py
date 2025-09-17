@@ -88,6 +88,7 @@ class VoiceInputWidget(QtWidgets.QWidget):
         """
         super().__init__(parent)
         self.language = language
+        self.recognizer = sr.Recognizer()
         self._soundvoice_available = SOUNDVOICE_OK
         self.recorder: Optional[SoundVoiceRecorder] = SoundVoiceRecorder() if SOUNDVOICE_OK else None
         self._session_active = False
@@ -112,9 +113,9 @@ class VoiceInputWidget(QtWidgets.QWidget):
         self.voice_button.setMinimumHeight(72)
         self.voice_button.setCheckable(self._soundvoice_available)
         if self._soundvoice_available:
-            self.voice_button.clicked.connect(self._handle_primary_press)
+            self.voice_button.clicked.connect(self._handle_primary_clicked)
         else:
-            self.voice_button.clicked.connect(self._start_basic_capture)
+            self.voice_button.clicked.connect(self.start_voice_input)
         self._apply_record_button_style()
         self._init_icons()
         self._set_record_button_state()
@@ -166,18 +167,29 @@ class VoiceInputWidget(QtWidgets.QWidget):
         self._resume_icon = self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay)
         self._processing_icon = self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload)
 
-    def _handle_primary_press(self):
+    def _handle_primary_clicked(self):
+        if self._transcribing:
+            return
+        if not self._soundvoice_available:
+            self.start_voice_input()
+            return
+        if not self._session_active or self._is_paused:
+            self.start_voice_input()
+        else:
+            self._pause_recording()
+
+    def start_voice_input(self):
         if self._transcribing:
             return
         if not self._soundvoice_available or self.recorder is None:
+            self._start_basic_capture()
             return
-
-        if not self._session_active:
-            self._begin_recording()
-        elif self._is_paused:
+        if self._session_active and not self._is_paused:
+            return
+        if self._session_active and self._is_paused:
             self._resume_recording()
-        else:
-            self._pause_recording()
+            return
+        self._begin_recording()
 
     def _begin_recording(self) -> None:
         if self.recorder is None:
@@ -241,8 +253,8 @@ class VoiceInputWidget(QtWidgets.QWidget):
                 raw_audio = self.recorder.stop()
             else:
                 self.recorder.discard()
-        except Exception as e:
-            QtWidgets.QMessageBox.warning(self, "SoundVoice", f"Could not stop recording: {e}")
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "SoundVoice", f"Could not stop recording: {exc}")
         self._session_active = False
         self._is_paused = False
         if self.voice_button.isCheckable():
@@ -348,8 +360,9 @@ class VoiceInputWidget(QtWidgets.QWidget):
     def _update_controls(self) -> None:
         self.voice_button.setEnabled(not self._transcribing)
         if self._soundvoice_available and self.stop_button and self.cancel_button:
-            self.stop_button.setEnabled(self._session_active and not self._transcribing)
-            self.cancel_button.setEnabled(self._session_active and not self._transcribing)
+            enabled = self._session_active and not self._transcribing
+            self.stop_button.setEnabled(enabled)
+            self.cancel_button.setEnabled(enabled)
 
     def _apply_record_button_style(self):
         self.voice_button.setStyleSheet(
