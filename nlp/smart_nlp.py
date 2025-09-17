@@ -1,29 +1,26 @@
 # smart_nlp.py
-# imports (top)
+from __future__ import annotations
+
+import re
+from datetime import datetime
+from typing import Dict, List, Optional
+
 try:
     from dateparser.search import search_dates
 except Exception:
     search_dates = None
 
-
-import re
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
-
-import dateparser
 from rapidfuzz import fuzz, process
-# nlp/smart_nlp.py
-from typing import Dict
-from .local_gemma_it import extract_fields
 
-class SmartExtractor:
-    def extract(self, text: str) -> Dict:
-        return extract_fields(text or "")
+try:
+    from .local_gemma_it import extract_fields as _gemma_extract
+except Exception:
+    _gemma_extract = None
 
 try:
     import spacy
     from spacy.matcher import PhraseMatcher
-except Exception as e:
+except Exception:
     spacy = None
     PhraseMatcher = None
 
@@ -39,7 +36,32 @@ _SYMPTOM_LEXICON = [
 _AGE_PAT = re.compile(r"\b(\d{1,3})\s*(?:years?\s*old|y/?o|yrs?|yo)\b", re.I)
 _AGE_LOOSE = re.compile(r"\bage\s*(?:is|:)?\s*(\d{1,3})\b", re.I)
 
+
 class SmartExtractor:
+    """Prefer Gemma extraction but fall back to regex heuristics."""
+
+    def __init__(self) -> None:
+        self._gemma_extract = _gemma_extract
+        if self._gemma_extract is None:
+            print("[SmartExtractor] Gemma extractor unavailable; using regex fallback.")
+        self._regex = _RegexExtractor()
+
+    def extract(self, text: str) -> Dict:
+        payload = text or ""
+
+        if self._gemma_extract is not None:
+            try:
+                data = self._gemma_extract(payload) or {}
+                if data:
+                    return data
+                print("[SmartExtractor] Gemma returned empty payload; using regex fallback.")
+            except Exception as exc:
+                print("[SmartExtractor] Gemma extraction failed:", exc)
+
+        return self._regex.extract(payload)
+
+
+class _RegexExtractor:
     def __init__(self):
         self.nlp = None
         self.matcher = None

@@ -457,6 +457,22 @@ def parse_patient_info(text: str) -> Dict:
 # ====================== Whisper helpers ======================
 USE_WHISPER_BY_DEFAULT = True
 
+_MIC_TIMEOUT_SECS = 15
+_MIC_SEGMENT_LIMIT_SECS = 30
+_MIC_TOTAL_LIMIT_SECS = 180
+_MIC_SILENCE_FRACTION = 0.7
+_MIC_AMBIENT_SEC = 0.6
+_MIC_PAUSE_THRESHOLD = 1.35
+
+def _audio_seconds(audio: sr.AudioData) -> float:
+    try:
+        frames = len(getattr(audio, "frame_data", b""))
+        sample_rate = getattr(audio, "sample_rate", 0) or 1
+        sample_width = getattr(audio, "sample_width", 0) or 1
+        return frames / float(sample_rate * sample_width)
+    except Exception:
+        return 0.0
+
 def _make_whisper_model(size: str):
     if not WHISPER_OK:
         raise RuntimeError("faster-whisper not installed")
@@ -529,6 +545,7 @@ class VoiceInputWidget(QtWidgets.QWidget):
 
         self.use_whisper = USE_WHISPER_BY_DEFAULT if use_whisper is None else bool(use_whisper)
         self.whisper_model_size = whisper_model_size
+        self._last_recording_truncated = False
         self._build_ui()
         self._refresh_labels()
 
@@ -563,6 +580,7 @@ class VoiceInputWidget(QtWidgets.QWidget):
         self.btn.setMinimumHeight(44)
         self.btn.setProperty("variant", "info"); self.btn.setProperty("accent", "sky")
         self.btn.clicked.connect(self._start)
+        self.btn.setToolTip(_tr(self, "Capture up to 3 minutes of speech; recording stops when you pause."))
         _polish(self.btn)
         root.addWidget(self.btn)
 
@@ -581,14 +599,62 @@ class VoiceInputWidget(QtWidgets.QWidget):
     def retranslateUi(self):
         self._refresh_labels()
 
+    def _capture_audio(self, r: sr.Recognizer):
+        chunks = []
+        total_seconds = 0.0
+        truncated = False
+        with sr.Microphone() as source:
+            try:
+                r.pause_threshold = max(_MIC_PAUSE_THRESHOLD, getattr(r, "pause_threshold", 0.0))
+            except Exception:
+                pass
+            try:
+                r.non_speaking_duration = max(_MIC_AMBIENT_SEC, getattr(r, "non_speaking_duration", 0.0))
+            except Exception:
+                pass
+            try:
+                r.dynamic_energy_threshold = True
+            except Exception:
+                pass
+            r.adjust_for_ambient_noise(source, duration=_MIC_AMBIENT_SEC)
+
+            while total_seconds < _MIC_TOTAL_LIMIT_SECS:
+                chunk = r.listen(
+                    source,
+                    timeout=_MIC_TIMEOUT_SECS,
+                    phrase_time_limit=_MIC_SEGMENT_LIMIT_SECS,
+                )
+                chunks.append(chunk)
+                chunk_seconds = _audio_seconds(chunk)
+                total_seconds += chunk_seconds
+                if chunk_seconds < (_MIC_SEGMENT_LIMIT_SECS * _MIC_SILENCE_FRACTION):
+                    break
+                if total_seconds >= _MIC_TOTAL_LIMIT_SECS:
+                    truncated = True
+                    break
+        if not chunks:
+            raise sr.WaitTimeoutError("no speech detected")
+        if len(chunks) == 1:
+            return chunks[0], truncated
+
+        base_rate = getattr(chunks[0], "sample_rate", 16000)
+        base_width = getattr(chunks[0], "sample_width", 2)
+        raw_parts = []
+        for chunk in chunks:
+            if getattr(chunk, "sample_rate", base_rate) != base_rate or getattr(chunk, "sample_width", base_width) != base_width:
+                raise RuntimeError("Mismatched audio chunks; unable to merge recording")
+            raw_parts.append(chunk.get_raw_data())
+        merged = sr.AudioData(b"".join(raw_parts), base_rate, base_width)
+        return merged, truncated or (total_seconds >= _MIC_TOTAL_LIMIT_SECS)
+
     def _start(self):
         self.btn.setDown(True); QtCore.QTimer.singleShot(150, lambda: self.btn.setDown(False))
         self.btn.setText(_tr(self, "Listening…")); QtWidgets.QApplication.processEvents()
         r = sr.Recognizer()
+        self._last_recording_truncated = False
         try:
-            with sr.Microphone() as source:
-                r.adjust_for_ambient_noise(source, duration=0.5)
-                audio = r.listen(source, timeout=10)
+            audio, truncated = self._capture_audio(r)
+            self._last_recording_truncated = bool(truncated)
         except sr.WaitTimeoutError:
             QtWidgets.QMessageBox.warning(self, _tr(self,"Voice Input"), _tr(self,"Listening timed out."))
             self._refresh_labels(); return
@@ -638,6 +704,13 @@ class VoiceInputWidget(QtWidgets.QWidget):
     def _ok(self, text: str):
         self.textReady.emit(text or "")
         self._refresh_labels()
+        if getattr(self, "_last_recording_truncated", False):
+            QtWidgets.QMessageBox.information(
+                self,
+                _tr(self, "Voice Input"),
+                _tr(self, "Recording reached the maximum duration and was trimmed."),
+            )
+        self._last_recording_truncated = False
 
     def _err(self, msg: str):
         QtWidgets.QMessageBox.warning(
@@ -645,6 +718,7 @@ class VoiceInputWidget(QtWidgets.QWidget):
             msg + "\n" + _tr(self,"If Whisper is unavailable, the tool will fall back to Google when possible.")
         )
         self._refresh_labels()
+        self._last_recording_truncated = False
 
 # ====================== Report helpers ======================
 def generate_pdf_report(data: Dict, file_path: str):
