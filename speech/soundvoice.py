@@ -50,11 +50,24 @@ class SoundVoiceRecorder:
             self._status.clear()
         return msgs
 
-    def _enqueue(self, data: Optional[bytes]):
-        try:
-            self._queue.put_nowait(data)
-        except queue.Full:  # pragma: no cover - should not occur, but guard anyway
-            pass
+    def _enqueue(self, data: Optional[bytes], *, ensure_delivery: bool = False):
+        if self._queue is None:
+            return
+        if ensure_delivery:
+            while True:
+                try:
+                    self._queue.put(data, timeout=0.1)
+                    break
+                except queue.Full:  # pragma: no cover - bounded queues drain quickly
+                    if not self._running and (
+                        self._reader_thread is None or not self._reader_thread.is_alive()
+                    ):
+                        break
+        else:
+            try:
+                self._queue.put_nowait(data)
+            except queue.Full:  # pragma: no cover - should not occur, but guard anyway
+                pass
 
     def start(self, *, reset: bool = True) -> None:
         """Begin recording from the system microphone."""
@@ -124,7 +137,7 @@ class SoundVoiceRecorder:
                 self._stream.close()
             self._stream = None
         self._running = False
-        self._enqueue(None)
+        self._enqueue(None, ensure_delivery=True)
         if self._reader_thread is not None:
             self._reader_thread.join(timeout=1.0)
         self._reader_thread = None
