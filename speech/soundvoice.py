@@ -130,10 +130,12 @@ class SoundVoiceRecorder:
         self._reader_thread = None
 
     def _drain_queue(self) -> None:
-        while self._running:
+        while True:
             try:
                 chunk = self._queue.get(timeout=0.5)
             except queue.Empty:
+                if not self._running:
+                    break
                 continue
             if chunk is None:
                 break
