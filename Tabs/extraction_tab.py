@@ -20,6 +20,7 @@ import os
 import re
 import json
 import tempfile
+import time
 from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Tuple, Optional
 from nlp.local_gemma_it import extract_fields
@@ -457,6 +458,140 @@ def parse_patient_info(text: str) -> Dict:
 # ====================== Whisper helpers ======================
 USE_WHISPER_BY_DEFAULT = True
 
+_MIC_TIMEOUT_SECS = 15
+_MIC_SEGMENT_LIMIT_SECS = 30
+_MIC_TOTAL_LIMIT_SECS = 180
+_MIC_SILENCE_FRACTION = 0.7
+_MIC_AMBIENT_SEC = 0.6
+_MIC_PAUSE_THRESHOLD = 1.35
+
+def _audio_seconds(audio: sr.AudioData) -> float:
+    try:
+        frames = len(getattr(audio, "frame_data", b""))
+        sample_rate = getattr(audio, "sample_rate", 0) or 1
+        sample_width = getattr(audio, "sample_width", 0) or 1
+        return frames / float(sample_rate * sample_width)
+    except Exception:
+        return 0.0
+
+def _capture_audio(r: sr.Recognizer, progress_cb=None) -> Tuple[sr.AudioData, bool, float]:
+    chunks: List[sr.AudioData] = []
+    total_seconds = 0.0
+    truncated = False
+    limit = float(_MIC_TOTAL_LIMIT_SECS)
+
+    if progress_cb:
+        try:
+            progress_cb(0.0, limit)
+        except Exception:
+            pass
+
+    with sr.Microphone() as source:
+        try:
+            r.pause_threshold = max(_MIC_PAUSE_THRESHOLD, getattr(r, "pause_threshold", 0.0))
+        except Exception:
+            pass
+        try:
+            r.non_speaking_duration = max(_MIC_AMBIENT_SEC, getattr(r, "non_speaking_duration", 0.0))
+        except Exception:
+            pass
+        try:
+            r.dynamic_energy_threshold = True
+        except Exception:
+            pass
+
+        r.adjust_for_ambient_noise(source, duration=_MIC_AMBIENT_SEC)
+
+        while total_seconds < limit:
+            chunk = r.listen(
+                source,
+                timeout=_MIC_TIMEOUT_SECS,
+                phrase_time_limit=_MIC_SEGMENT_LIMIT_SECS,
+            )
+            chunks.append(chunk)
+            chunk_seconds = _audio_seconds(chunk)
+            total_seconds += chunk_seconds
+            if progress_cb:
+                try:
+                    progress_cb(min(total_seconds, limit), limit)
+                except Exception:
+                    pass
+            if chunk_seconds < (_MIC_SEGMENT_LIMIT_SECS * _MIC_SILENCE_FRACTION):
+                break
+            if total_seconds >= limit:
+                truncated = True
+                break
+
+    if not chunks:
+        raise sr.WaitTimeoutError("no speech detected")
+
+    total_seconds = min(total_seconds, limit)
+
+    if len(chunks) == 1:
+        return chunks[0], truncated, total_seconds
+
+    base_rate = getattr(chunks[0], "sample_rate", 16000)
+    base_width = getattr(chunks[0], "sample_width", 2)
+    raw_parts = []
+    for chunk in chunks:
+        if (
+            getattr(chunk, "sample_rate", base_rate) != base_rate
+            or getattr(chunk, "sample_width", base_width) != base_width
+        ):
+            raise RuntimeError("Mismatched audio chunks; unable to merge recording")
+        raw_parts.append(chunk.get_raw_data())
+    merged = sr.AudioData(b"".join(raw_parts), base_rate, base_width)
+    return merged, truncated or (total_seconds >= limit), total_seconds
+
+class VoiceRecorderThread(QtCore.QThread):
+    progress = QtCore.pyqtSignal(float, float)
+    captured = QtCore.pyqtSignal(object, bool, object, float)
+    failed = QtCore.pyqtSignal(str, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def run(self):
+        r = sr.Recognizer()
+
+        def _emit_progress(total, limit):
+            self.progress.emit(total, limit)
+
+        try:
+            audio, truncated, total = _capture_audio(r, progress_cb=_emit_progress)
+            self.captured.emit(audio, truncated, r, total)
+        except sr.WaitTimeoutError:
+            self.failed.emit("timeout", "")
+        except OSError as e:
+            self.failed.emit("microphone", str(e))
+        except Exception as e:
+            self.failed.emit("error", str(e))
+
+class GoogleTranscribeThread(QtCore.QThread):
+    result = QtCore.pyqtSignal(str)
+    error = QtCore.pyqtSignal(str, str)
+
+    def __init__(self, audio: sr.AudioData, language: Optional[str], recognizer: Optional[sr.Recognizer] = None, parent=None):
+        super().__init__(parent)
+        self.audio = audio
+        self.language = language
+        self.recognizer = recognizer or sr.Recognizer()
+
+    def run(self):
+        r = self.recognizer or sr.Recognizer()
+        try:
+            if self.language is None:
+                text = _google_dual(r, self.audio)
+            else:
+                text = r.recognize_google(self.audio, language=self.language)
+            self.result.emit(text)
+        except sr.UnknownValueError:
+            self.error.emit("unknown", "")
+        except sr.RequestError as e:
+            self.error.emit("request", str(e))
+        except Exception as e:
+            self.error.emit("error", str(e))
+
 def _make_whisper_model(size: str):
     if not WHISPER_OK:
         raise RuntimeError("faster-whisper not installed")
@@ -479,6 +614,30 @@ def _lang_to_codes(choice: str):
     if choice == "ar": return "ar", "ar-SA"
     if choice == "en": return "en", "en-US"
     return None, None
+
+def _google_dual(r: sr.Recognizer, audio: sr.AudioData) -> str:
+    cands = []
+    for code in ("en-US", "ar-SA"):
+        try:
+            t = r.recognize_google(audio, language=code).strip()
+            if t:
+                cands.append((code, t))
+        except Exception:
+            pass
+    if not cands:
+        raise sr.RequestError("Google ASR returned no candidates")
+
+    def ar_ratio(s: str) -> float:
+        return len(_AR_CHARS.findall(s)) / max(1, len(s))
+
+    best = max(
+        cands,
+        key=lambda kv: (
+            ar_ratio(kv[1]) if kv[0].startswith("ar") else 0.0,
+            len(kv[1]),
+        ),
+    )
+    return best[1]
 
 class _WhisperThread(QtCore.QThread):
     result = QtCore.pyqtSignal(str)
@@ -529,7 +688,16 @@ class VoiceInputWidget(QtWidgets.QWidget):
 
         self.use_whisper = USE_WHISPER_BY_DEFAULT if use_whisper is None else bool(use_whisper)
         self.whisper_model_size = whisper_model_size
+        self._last_recording_truncated = False
         self._build_ui()
+        self._state = "idle"
+        self._recorder = None
+        self._transcribe_thread = None
+        self._record_timer = QtCore.QTimer(self)
+        self._record_timer.setInterval(200)
+        self._record_timer.timeout.connect(self._tick_record_timer)
+        self._record_started = 0.0
+        self._record_progress_seconds = 0.0
         self._refresh_labels()
 
     def _build_ui(self):
@@ -563,6 +731,7 @@ class VoiceInputWidget(QtWidgets.QWidget):
         self.btn.setMinimumHeight(44)
         self.btn.setProperty("variant", "info"); self.btn.setProperty("accent", "sky")
         self.btn.clicked.connect(self._start)
+        self.btn.setToolTip(_tr(self, "Capture up to 3 minutes of speech; recording stops when you pause."))
         _polish(self.btn)
         root.addWidget(self.btn)
 
@@ -582,69 +751,147 @@ class VoiceInputWidget(QtWidgets.QWidget):
         self._refresh_labels()
 
     def _start(self):
-        self.btn.setDown(True); QtCore.QTimer.singleShot(150, lambda: self.btn.setDown(False))
-        self.btn.setText(_tr(self, "Listening…")); QtWidgets.QApplication.processEvents()
-        r = sr.Recognizer()
-        try:
-            with sr.Microphone() as source:
-                r.adjust_for_ambient_noise(source, duration=0.5)
-                audio = r.listen(source, timeout=10)
-        except sr.WaitTimeoutError:
-            QtWidgets.QMessageBox.warning(self, _tr(self,"Voice Input"), _tr(self,"Listening timed out."))
-            self._refresh_labels(); return
-        except Exception as e:
-            QtWidgets.QMessageBox.warning(self, _tr(self,"Voice Input"), f"{_tr(self,'Microphone error:')} {e}")
-            self._refresh_labels(); return
-
-        w_lang, g_lang = _lang_to_codes(self.choice)
-
-        if self.use_whisper and WHISPER_OK:
-            self.btn.setText(_tr(self, "Transcribing… (Whisper)")); QtWidgets.QApplication.processEvents()
-            t = _WhisperThread(audio.get_wav_data(), language=w_lang,
-                               model_size=self.whisper_model_size,
-                               translate=self.chk_translate.isChecked())
-            t.result.connect(self._ok); t.error.connect(self._err)
-            self._t = t; t.start()
+        if self._state != "idle":
             return
+        self.btn.setDown(True); QtCore.QTimer.singleShot(150, lambda: self.btn.setDown(False))
+        self._last_recording_truncated = False
+        self._set_recording_ui()
 
-        self.btn.setText(_tr(self, "Transcribing… (Google)")); QtWidgets.QApplication.processEvents()
-        try:
-            if g_lang is None:
-                text = self._google_dual(r, audio)
-            else:
-                text = r.recognize_google(audio, language=g_lang)
-            self._ok(text)
-        except sr.UnknownValueError:
-            self._err(_tr(self, "Could not understand the audio."))
-        except sr.RequestError as e:
-            self._err(f"{_tr(self,'Speech service error:')} {e}")
-        except Exception as e:
-            self._err(str(e))
+        recorder = VoiceRecorderThread(self)
+        recorder.progress.connect(self._on_record_progress)
+        recorder.captured.connect(self._on_record_finished)
+        recorder.failed.connect(self._on_record_error)
+        recorder.finished.connect(recorder.deleteLater)
+        self._recorder = recorder
+        recorder.start()
 
-    def _google_dual(self, r: sr.Recognizer, audio: sr.AudioData) -> str:
-        cands = []
-        for code in ("en-US", "ar-SA"):
-            try:
-                t = r.recognize_google(audio, language=code).strip()
-                if t: cands.append((code, t))
-            except Exception:
-                pass
-        if not cands:
-            raise sr.RequestError("Google ASR returned no candidates")
-        def ar_ratio(s: str): return len(_AR_CHARS.findall(s))/max(1,len(s))
-        best = max(cands, key=lambda kv: (ar_ratio(kv[1]) if kv[0].startswith("ar") else 0.0, len(kv[1])) )
-        return best[1]
+    def _fmt_clock(self, seconds: float) -> str:
+        secs = max(0, int(seconds))
+        return f"{secs // 60:02d}:{secs % 60:02d}"
 
-    def _ok(self, text: str):
-        self.textReady.emit(text or "")
+    def _update_recording_label(self):
+        if self._state != "recording":
+            return
+        limit = float(_MIC_TOTAL_LIMIT_SECS)
+        elapsed = time.monotonic() - self._record_started if self._record_started else 0.0
+        elapsed = max(elapsed, self._record_progress_seconds)
+        elapsed = min(elapsed, limit)
+        self.btn.setText(f"{_tr(self,'Listening…')} {self._fmt_clock(elapsed)} / {self._fmt_clock(limit)}")
+
+    def _tick_record_timer(self):
+        if self._state != "recording":
+            self._record_timer.stop()
+            return
+        self._update_recording_label()
+
+    def _set_recording_ui(self):
+        if self._record_timer.isActive():
+            self._record_timer.stop()
+        self._state = "recording"
+        self.combo.setEnabled(False)
+        self.chk_translate.setEnabled(False)
+        self._record_started = time.monotonic()
+        self._record_progress_seconds = 0.0
+        self._update_recording_label()
+        QtWidgets.QApplication.processEvents()
+        self._record_timer.start()
+
+    def _set_transcribing_ui(self, engine_label: str):
+        if self._record_timer.isActive():
+            self._record_timer.stop()
+        self._state = "transcribing"
+        base = _tr(self, "Transcribing…")
+        self.btn.setText(f"{base} ({engine_label})")
+        QtWidgets.QApplication.processEvents()
+
+    def _set_idle(self):
+        if self._record_timer.isActive():
+            self._record_timer.stop()
+        self._state = "idle"
+        self._record_started = 0.0
+        self._record_progress_seconds = 0.0
+        self.combo.setEnabled(True)
+        self.chk_translate.setEnabled(True)
         self._refresh_labels()
 
+    def _on_record_progress(self, seconds: float, limit: float):
+        self._record_progress_seconds = min(seconds, float(limit) if limit else seconds)
+        if self._state == "recording":
+            self._update_recording_label()
+
+    def _on_record_finished(self, audio: sr.AudioData, truncated: bool, recognizer: sr.Recognizer, total: float):
+        self._recorder = None
+        self._record_progress_seconds = total
+        if self._state == "recording":
+            self._update_recording_label()
+        self._last_recording_truncated = bool(truncated)
+
+        w_lang, g_lang = _lang_to_codes(self.choice)
+        if self.use_whisper and WHISPER_OK:
+            self._set_transcribing_ui("Whisper")
+            t = _WhisperThread(
+                audio.get_wav_data(),
+                language=w_lang,
+                model_size=self.whisper_model_size,
+                translate=self.chk_translate.isChecked(),
+            )
+            t.result.connect(self._ok)
+            t.error.connect(self._err)
+        else:
+            self._set_transcribing_ui("Google")
+            t = GoogleTranscribeThread(audio, g_lang, recognizer, parent=self)
+            t.result.connect(self._on_google_result)
+            t.error.connect(self._on_google_error)
+
+        t.finished.connect(t.deleteLater)
+        self._transcribe_thread = t
+        t.start()
+
+    def _on_record_error(self, kind: str, detail: str):
+        self._recorder = None
+        self._last_recording_truncated = False
+        self._set_idle()
+        title = _tr(self, "Voice Input")
+        if kind == "timeout":
+            QtWidgets.QMessageBox.warning(self, title, _tr(self, "Listening timed out."))
+        elif kind == "microphone":
+            QtWidgets.QMessageBox.warning(self, title, f"{_tr(self,'Microphone error:')} {detail}")
+        else:
+            msg = detail or _tr(self, "An unexpected error occurred.")
+            QtWidgets.QMessageBox.warning(self, title, f"{_tr(self,'Microphone error:')} {msg}")
+
+    def _on_google_result(self, text: str):
+        self._ok(text)
+
+    def _on_google_error(self, kind: str, detail: str):
+        if kind == "unknown":
+            self._err(_tr(self, "Could not understand the audio."))
+        elif kind == "request":
+            self._err(f"{_tr(self,'Speech service error:')} {detail}")
+        else:
+            self._err(detail or _tr(self, "An unexpected transcription error occurred."))
+
+    def _ok(self, text: str):
+        self._transcribe_thread = None
+        self.textReady.emit(text or "")
+        truncated = bool(getattr(self, "_last_recording_truncated", False))
+        self._last_recording_truncated = False
+        self._set_idle()
+        if truncated:
+            QtWidgets.QMessageBox.information(
+                self,
+                _tr(self, "Voice Input"),
+                _tr(self, "Recording reached the maximum duration and was trimmed."),
+            )
+
     def _err(self, msg: str):
+        self._transcribe_thread = None
+        self._set_idle()
         QtWidgets.QMessageBox.warning(
             self, _tr(self,"Voice Input Error"),
             msg + "\n" + _tr(self,"If Whisper is unavailable, the tool will fall back to Google when possible.")
         )
-        self._refresh_labels()
+        self._last_recording_truncated = False
 
 # ====================== Report helpers ======================
 def generate_pdf_report(data: Dict, file_path: str):
