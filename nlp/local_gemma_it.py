@@ -1,7 +1,7 @@
 # nlp/local_gemma_it.py
-import os, re, json
+import os, re, json, ast
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from threading import Lock
 
 import torch
@@ -117,6 +117,57 @@ JSON:
 
 _RX_JSON = re.compile(r"\{[\s\S]*?\}", re.M)
 
+
+def _loads_lenient(raw: str):
+    """Attempt to parse JSON with a few light repairs."""
+
+    def _try_load(candidate: str):
+        try:
+            return json.loads(candidate)
+        except Exception:
+            return None
+
+    cleaned = raw.strip()
+    parsed = _try_load(cleaned)
+    if parsed is not None:
+        return parsed
+
+    repaired = re.sub(r":\s*(unknown|n/?a|none)(?=[,}\]])", ": null", cleaned, flags=re.I)
+    if repaired != cleaned:
+        parsed = _try_load(repaired)
+        if parsed is not None:
+            return parsed
+        cleaned = repaired
+
+    repaired = re.sub(r":\s*(True|False)(?=[,}\]])", lambda m: ": " + m.group(1).lower(), cleaned)
+    if repaired != cleaned:
+        parsed = _try_load(repaired)
+        if parsed is not None:
+            return parsed
+        cleaned = repaired
+
+    repaired = re.sub(r",\s*(?=[}\]])", "", cleaned)
+    if repaired != cleaned:
+        parsed = _try_load(repaired)
+        if parsed is not None:
+            return parsed
+        cleaned = repaired
+
+    if cleaned.count('"') == 0 and "'" in cleaned:
+        repaired = cleaned.replace("'", '"')
+        parsed = _try_load(repaired)
+        if parsed is not None:
+            return parsed
+
+    try:
+        literal = ast.literal_eval(raw)
+    except Exception:
+        literal = None
+    if isinstance(literal, dict):
+        return literal
+
+    return None
+
 def _make_messages(text: str):
     system = (
         "You are a clinical extractor. Return ONLY valid JSON.\n"
@@ -165,9 +216,9 @@ def extract_fields(text: str) -> Dict[str, Any]:
 
     m = _RX_JSON.search(s)
     cand = m.group(0) if m else s
-    try:
-        data = json.loads(cand)
-    except Exception:
+
+    data = _loads_lenient(cand)
+    if data is None:
         print("[Gemma RAW]", s[:400])
         return {}
 
