@@ -22,7 +22,6 @@ import json
 import tempfile
 from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Tuple, Optional
-from nlp.local_gemma_it import extract_fields
 from PyQt5 import QtWidgets, QtCore, QtGui
 try:
     from nlp.local_gemma_it import extract_fields as _gemma_extract
