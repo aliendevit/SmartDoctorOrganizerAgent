@@ -1,9 +1,45 @@
 import io
 import sys
+from typing import Optional
+
 from PyQt5 import QtWidgets, QtCore, QtGui
 import speech_recognition as sr
 
 from speech.soundvoice import SOUNDVOICE_OK, SoundVoiceRecorder
+
+
+class _TranscriptionWorker(QtCore.QObject):
+    finished = QtCore.pyqtSignal(str)
+    failed = QtCore.pyqtSignal(str, str)
+
+    def __init__(self, wav_bytes: bytes, language: str):
+        super().__init__()
+        self._wav_bytes = wav_bytes
+        self._language = language
+
+    @QtCore.pyqtSlot()
+    def run(self) -> None:
+        recognizer = sr.Recognizer()
+        try:
+            with sr.AudioFile(io.BytesIO(self._wav_bytes)) as source:
+                audio = recognizer.record(source)
+            text = recognizer.recognize_google(audio, language=self._language)
+        except sr.WaitTimeoutError:
+            self.failed.emit("Listening timed out.", "Listening timed out. Please try again.")
+        except sr.UnknownValueError:
+            self.failed.emit(
+                "Could not understand the audio.",
+                "Could not understand the audio. Please speak clearly.",
+            )
+        except sr.RequestError as exc:
+            self.failed.emit(
+                "Service unavailable.",
+                f"Could not request results from the speech service: {exc}",
+            )
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            self.failed.emit("An unexpected error occurred.", str(exc))
+        else:
+            self.finished.emit(text)
 
 
 class VoiceInputWidget(QtWidgets.QWidget):
@@ -16,10 +52,16 @@ class VoiceInputWidget(QtWidgets.QWidget):
         """
         super().__init__(parent)
         self.language = language
-        self.recognizer = sr.Recognizer()
         self.recorder = SoundVoiceRecorder()
-        self._recording = False
+        self._session_active = False
+        self._is_paused = False
+        self._transcribing = False
         self._has_recorded = False
+        self._transcription_thread: Optional[QtCore.QThread] = None
+        self._mic_icon = QtGui.QIcon()
+        self._pause_icon = QtGui.QIcon()
+        self._resume_icon = QtGui.QIcon()
+        self._processing_icon = QtGui.QIcon()
         self.setup_ui()
 
     def setup_ui(self):
@@ -32,20 +74,25 @@ class VoiceInputWidget(QtWidgets.QWidget):
         self.voice_button.setIconSize(QtCore.QSize(32, 32))
         self.voice_button.setMinimumHeight(72)
         self.voice_button.setCheckable(True)
-        self.voice_button.clicked.connect(self._on_record_button_clicked)
+        self.voice_button.clicked.connect(self._handle_primary_press)
         self._apply_record_button_style()
-        self._set_record_button_state(recording=False)
+        self._init_icons()
+        self._set_record_button_state()
         layout.addWidget(self.voice_button)
 
         controls = QtWidgets.QHBoxLayout()
         controls.setSpacing(8)
 
         self.stop_button = QtWidgets.QPushButton("Stop")
+        self.stop_button.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_MediaStop))
+        self.stop_button.setIconSize(QtCore.QSize(24, 24))
         self.stop_button.clicked.connect(self.stop_and_transcribe)
         self.stop_button.setEnabled(False)
         controls.addWidget(self.stop_button)
 
         self.cancel_button = QtWidgets.QPushButton("Cancel")
+        self.cancel_button.setIcon(self.style().standardIcon(QtWidgets.QStyle.SP_DialogCancelButton))
+        self.cancel_button.setIconSize(QtCore.QSize(24, 24))
         self.cancel_button.clicked.connect(self.cancel_recording)
         self.cancel_button.setEnabled(False)
         controls.addWidget(self.cancel_button)
@@ -60,9 +107,19 @@ class VoiceInputWidget(QtWidgets.QWidget):
             self.status_label.setText("SoundVoice requires the optional 'sounddevice' package.")
 
         self.setLayout(layout)
+        self._update_controls()
 
-    def start_voice_input(self):
-        if self._recording:
+    def _init_icons(self) -> None:
+        mic = QtGui.QIcon.fromTheme("audio-input-microphone")
+        if mic.isNull():
+            mic = self.style().standardIcon(QtWidgets.QStyle.SP_MediaRecord)
+        self._mic_icon = mic
+        self._pause_icon = self.style().standardIcon(QtWidgets.QStyle.SP_MediaPause)
+        self._resume_icon = self.style().standardIcon(QtWidgets.QStyle.SP_MediaPlay)
+        self._processing_icon = self.style().standardIcon(QtWidgets.QStyle.SP_BrowserReload)
+
+    def _handle_primary_press(self):
+        if self._transcribing:
             return
         if not SOUNDVOICE_OK:
             self.voice_button.setChecked(False)
@@ -72,20 +129,51 @@ class VoiceInputWidget(QtWidgets.QWidget):
                 "SoundVoice is unavailable. Install the 'sounddevice' package to enable recording.",
             )
             return
+
+        if not self._session_active:
+            self._begin_recording()
+        elif self._is_paused:
+            self._resume_recording()
+        else:
+            self._pause_recording()
+
+    def _begin_recording(self) -> None:
         try:
             self.recorder.start()
-        except Exception as e:
+        except Exception as exc:
             self.voice_button.setChecked(False)
-            QtWidgets.QMessageBox.warning(self, "SoundVoice", f"Could not start recording: {e}")
+            QtWidgets.QMessageBox.warning(self, "SoundVoice", f"Could not start recording: {exc}")
             return
 
-        self._recording = True
-        self.voice_button.setEnabled(True)
-        self.voice_button.setChecked(True)
-        self.stop_button.setEnabled(True)
-        self.cancel_button.setEnabled(True)
-        self._set_record_button_state(recording=True)
+        self._session_active = True
+        self._is_paused = False
         self.status_label.setText("Recording… press Stop when you are finished.")
+        self._set_record_button_state()
+        self._update_controls()
+
+    def _pause_recording(self) -> None:
+        try:
+            self.recorder.pause()
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "SoundVoice", f"Could not pause recording: {exc}")
+            return
+
+        self._is_paused = True
+        self.status_label.setText("Recording paused. Press Resume to continue or Stop to finish.")
+        self._set_record_button_state()
+        self._update_controls()
+
+    def _resume_recording(self) -> None:
+        try:
+            self.recorder.resume()
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "SoundVoice", f"Could not resume recording: {exc}")
+            return
+
+        self._is_paused = False
+        self.status_label.setText("Recording… press Stop when you are finished.")
+        self._set_record_button_state()
+        self._update_controls()
 
     def stop_and_transcribe(self):
         self._finish_recording(finalize=True)
@@ -94,20 +182,22 @@ class VoiceInputWidget(QtWidgets.QWidget):
         self._finish_recording(finalize=False)
 
     def _finish_recording(self, finalize: bool):
-        if not self._recording:
+        if not self._session_active:
             return
-        self.stop_button.setEnabled(False)
-        self.cancel_button.setEnabled(False)
         QtWidgets.QApplication.processEvents()
+        raw_audio = b""
         try:
-            raw_audio = self.recorder.stop()
+            if finalize:
+                raw_audio = self.recorder.stop()
+            else:
+                self.recorder.discard()
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "SoundVoice", f"Could not stop recording: {e}")
-            raw_audio = b""
-        self._recording = False
-        self.voice_button.setEnabled(True)
+        self._session_active = False
+        self._is_paused = False
         self.voice_button.setChecked(False)
-        self._set_record_button_state(recording=False)
+        self._set_record_button_state()
+        self._update_controls()
 
         if not finalize:
             self.status_label.setText("Recording cancelled.")
@@ -125,61 +215,76 @@ class VoiceInputWidget(QtWidgets.QWidget):
         for status in self.recorder.status_messages:
             print(f"SoundVoice status: {status.message}")
 
-        try:
-            with sr.AudioFile(io.BytesIO(wav_bytes)) as source:
-                audio = self.recognizer.record(source)
-            text = self.recognizer.recognize_google(audio, language=self.language)
-        except sr.WaitTimeoutError:
-            self.status_label.setText("Listening timed out.")
-            QtWidgets.QMessageBox.warning(self, "SoundVoice", "Listening timed out. Please try again.")
-            return
-        except sr.UnknownValueError:
-            self.status_label.setText("Could not understand the audio.")
-            QtWidgets.QMessageBox.warning(
-                self,
-                "SoundVoice",
-                "Could not understand the audio. Please speak clearly.",
-            )
-            return
-        except sr.RequestError as e:
-            self.status_label.setText("Service unavailable.")
-            QtWidgets.QMessageBox.warning(
-                self,
-                "SoundVoice",
-                f"Could not request results from the speech service: {e}",
-            )
-            return
-        except Exception as e:
-            self.status_label.setText("An unexpected error occurred.")
-            QtWidgets.QMessageBox.warning(self, "SoundVoice", f"An unexpected error occurred: {e}")
-            return
+        self._transcribing = True
+        self._set_record_button_state()
+        self._update_controls()
+        self._launch_transcription(wav_bytes)
 
+    def _launch_transcription(self, wav_bytes: bytes) -> None:
+        worker = _TranscriptionWorker(wav_bytes, self.language)
+        thread = QtCore.QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_transcription_succeeded)
+        worker.failed.connect(self._on_transcription_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+        self._transcription_thread = thread
+
+    def _on_transcription_succeeded(self, text: str) -> None:
+        self._transcription_thread = None
+        self._transcribing = False
         self._has_recorded = True
         self.status_label.setText("Transcription complete.")
-        self._set_record_button_state(recording=False)
+        self._set_record_button_state()
+        self._update_controls()
         self.textReady.emit(text)
 
-    def _on_record_button_clicked(self):
-        if self._recording:
-            self.stop_and_transcribe()
-        else:
-            self.start_voice_input()
+    def _on_transcription_failed(self, status_text: str, detail: str) -> None:
+        self._transcription_thread = None
+        self._transcribing = False
+        self.status_label.setText(status_text)
+        self._set_record_button_state()
+        self._update_controls()
+        QtWidgets.QMessageBox.warning(self, "SoundVoice", detail)
 
-    def _set_record_button_state(self, recording: bool):
-        self.voice_button.setProperty("recording", recording)
-        mic_icon = QtGui.QIcon.fromTheme("audio-input-microphone")
-        if mic_icon.isNull():
-            mic_icon = self.style().standardIcon(QtWidgets.QStyle.SP_MediaRecord)
-        stop_icon = self.style().standardIcon(QtWidgets.QStyle.SP_MediaStop)
-        if recording:
-            self.voice_button.setText("Stop Recording")
-            self.voice_button.setIcon(stop_icon)
+    def _set_record_button_state(self):
+        if self._transcribing:
+            state = "processing"
+            icon = self._processing_icon
+            text = "Transcribing…"
+            checked = False
+        elif not self._session_active:
+            state = "idle"
+            icon = self._mic_icon
+            text = "Start New Recording" if self._has_recorded else "Start Recording"
+            checked = False
+        elif self._is_paused:
+            state = "paused"
+            icon = self._resume_icon
+            text = "Resume Recording"
+            checked = False
         else:
-            label = "Continue Recording" if self._has_recorded else "Start Recording"
-            self.voice_button.setText(label)
-            self.voice_button.setIcon(mic_icon)
+            state = "recording"
+            icon = self._pause_icon
+            text = "Pause Recording"
+            checked = True
+
+        self.voice_button.setProperty("recordState", state)
+        self.voice_button.setIcon(icon)
+        self.voice_button.setText(text)
+        self.voice_button.setChecked(checked)
         self.voice_button.style().unpolish(self.voice_button)
         self.voice_button.style().polish(self.voice_button)
+
+    def _update_controls(self) -> None:
+        self.voice_button.setEnabled(not self._transcribing)
+        self.stop_button.setEnabled(self._session_active and not self._transcribing)
+        self.cancel_button.setEnabled(self._session_active and not self._transcribing)
 
     def _apply_record_button_style(self):
         self.voice_button.setStyleSheet(
@@ -201,14 +306,31 @@ class VoiceInputWidget(QtWidgets.QWidget):
             QPushButton#voiceButton:pressed {
                 background-color: #0D47A1;
             }
-            QPushButton#voiceButton[recording="true"] {
+            QPushButton#voiceButton[recordState="recording"] {
                 background-color: #C62828;
             }
-            QPushButton#voiceButton[recording="true"]:hover {
+            QPushButton#voiceButton[recordState="recording"]:hover {
                 background-color: #B71C1C;
             }
-            QPushButton#voiceButton[recording="true"]:pressed {
+            QPushButton#voiceButton[recordState="recording"]:pressed {
                 background-color: #7F0000;
+            }
+            QPushButton#voiceButton[recordState="paused"] {
+                background-color: #F9A825;
+                color: #1F2933;
+            }
+            QPushButton#voiceButton[recordState="paused"]:hover {
+                background-color: #F57F17;
+            }
+            QPushButton#voiceButton[recordState="paused"]:pressed {
+                background-color: #E65100;
+            }
+            QPushButton#voiceButton[recordState="processing"] {
+                background-color: #455A64;
+            }
+            QPushButton#voiceButton:disabled {
+                background-color: #90A4AE;
+                color: #ECEFF1;
             }
         """
         )

@@ -24,18 +24,21 @@ class SoundVoiceStatus:
 
 
 class SoundVoiceRecorder:
-    """High-level wrapper above ``sounddevice`` providing start/stop controls."""
+    """High-level wrapper above ``sounddevice`` providing manual controls."""
 
-    def __init__(self, samplerate: int = 16_000, channels: int = 1):
+    def __init__(self, samplerate: int = 16_000, channels: int = 1, *, queue_maxsize: int = 64):
         self.samplerate = int(samplerate)
         self.channels = int(channels)
         self.dtype = "int16"
-        self._queue: "queue.Queue[Optional[bytes]]" = queue.Queue()
+        self._queue_maxsize = max(1, int(queue_maxsize))
+        self._queue: "queue.Queue[Optional[bytes]]" = queue.Queue(maxsize=self._queue_maxsize)
         self._frames: List[bytes] = []
         self._stream = None
         self._reader_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._running = False
+        self._paused = False
+        self._session_active = False
         self._status: List[SoundVoiceStatus] = []
 
     @property
@@ -53,7 +56,7 @@ class SoundVoiceRecorder:
         except queue.Full:  # pragma: no cover - should not occur, but guard anyway
             pass
 
-    def start(self) -> None:
+    def start(self, *, reset: bool = True) -> None:
         """Begin recording from the system microphone."""
 
         if not SOUNDVOICE_OK:
@@ -61,10 +64,40 @@ class SoundVoiceRecorder:
         if self._running:
             return
 
-        self._frames = []
-        self._queue = queue.Queue()
+        if reset or not self._session_active:
+            with self._lock:
+                self._frames = []
+        self._queue = queue.Queue(maxsize=self._queue_maxsize)
         self._running = True
+        self._paused = False
+        self._session_active = True
+        self._open_stream()
 
+    def resume(self) -> None:
+        """Resume a paused recording session without clearing buffered audio."""
+
+        if not SOUNDVOICE_OK:
+            raise RuntimeError("sounddevice is not available; install 'sounddevice' to enable SoundVoice.")
+        if self._running:
+            return
+        if not self._session_active:
+            self.start(reset=True)
+            return
+
+        self._queue = queue.Queue(maxsize=self._queue_maxsize)
+        self._running = True
+        self._paused = False
+        self._open_stream()
+
+    def pause(self) -> None:
+        """Temporarily stop streaming audio while keeping buffered frames."""
+
+        if not self._running:
+            return
+        self._paused = True
+        self._stop_stream()
+
+    def _open_stream(self) -> None:
         def _callback(indata, frames, time, status):  # pragma: no cover - callback executed by sounddevice
             if status:
                 with self._lock:
@@ -82,6 +115,20 @@ class SoundVoiceRecorder:
         self._reader_thread = threading.Thread(target=self._drain_queue, daemon=True)
         self._reader_thread.start()
 
+    def _stop_stream(self) -> None:
+        if self._stream is not None:
+            try:
+                if self._running:
+                    self._stream.stop()
+            finally:
+                self._stream.close()
+            self._stream = None
+        self._running = False
+        self._enqueue(None)
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=1.0)
+        self._reader_thread = None
+
     def _drain_queue(self) -> None:
         while self._running:
             try:
@@ -96,19 +143,11 @@ class SoundVoiceRecorder:
     def stop(self) -> bytes:
         """Stop recording and return raw PCM data."""
 
-        if not self._running:
+        if not self._session_active and not self._running:
             return b""
-        self._running = False
-        if self._stream is not None:
-            try:
-                self._stream.stop()
-            finally:
-                self._stream.close()
-            self._stream = None
-        self._enqueue(None)
-        if self._reader_thread is not None:
-            self._reader_thread.join(timeout=1.0)
-        self._reader_thread = None
+        self._stop_stream()
+        self._paused = False
+        self._session_active = False
         with self._lock:
             raw = b"".join(self._frames)
             self._frames = []
@@ -117,7 +156,9 @@ class SoundVoiceRecorder:
     def discard(self) -> None:
         """Abort recording and drop buffered audio without returning it."""
 
-        self.stop()
+        self._stop_stream()
+        self._paused = False
+        self._session_active = False
         with self._lock:
             self._frames = []
 
@@ -134,6 +175,18 @@ class SoundVoiceRecorder:
             wf.setframerate(self.samplerate)
             wf.writeframes(raw)
         return buffer.getvalue()
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
+
+    @property
+    def has_active_session(self) -> bool:
+        return self._session_active
 
 
 __all__ = ["SOUNDVOICE_OK", "SoundVoiceRecorder", "SoundVoiceStatus"]
